@@ -79,7 +79,7 @@ def test_producer_stream(magnetics):
         "flux_loop[4]/voltage/data",
     ]
 
-    data = producer.create_streaming_time_slice(magnetics)
+    data = producer.create_message(magnetics)
     arr = np.frombuffer(data, dtype=float)
     assert arr[0] == 0.0  # time
     assert np.array_equal(arr[1::2], [10.0 + i for i in range(5)])  # flux/data

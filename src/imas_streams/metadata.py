@@ -20,6 +20,8 @@ _OBJECT_SIZES = {
 
 
 class DynamicData(BaseModel):
+    """Dynamic data specifier."""
+
     path: str
     """Path inside the IDS, e.g. `flux_loop[0]/flux/data`"""
 
@@ -31,6 +33,11 @@ class DynamicData(BaseModel):
     """String representation of the data type."""
 
     model_config = ConfigDict(extra="forbid")
+
+    @property
+    def nbytes(self) -> int:
+        """The number of bytes required to represent this dynamic data item."""
+        return np.prod(self.shape, dtype=int) * _OBJECT_SIZES[self.data_type]
 
 
 class StreamingIMASMetadata(BaseModel):
@@ -54,6 +61,7 @@ class StreamingIMASMetadata(BaseModel):
 
     @field_serializer("static_data")
     def serialize_static_data(self, static_data: IDSToplevel, _info) -> str:
+        """Serialize the static data IDS when creating JSON from this metadata."""
         return base64.b64encode(static_data.serialize()).decode()
 
     @model_validator(mode="before")
@@ -89,6 +97,7 @@ class StreamingIMASMetadata(BaseModel):
     @field_validator("dynamic_data", mode="after")
     @classmethod
     def validate_dynamic_data(cls, value: list[DynamicData]):
+        """Validate the dynamic data"""
         if not value:
             raise ValueError("Dynamic Data is missing.")
         if value[0].path != "time":
@@ -105,10 +114,6 @@ class StreamingIMASMetadata(BaseModel):
         return value
 
     @property
-    def buffersize(self):
-        """Calculate the size of the dynamic data buffer in bytes."""
-        objsize = _OBJECT_SIZES
-        return sum(
-            np.prod(dyndata.shape, dtype=int) * objsize[dyndata.data_type]
-            for dyndata in self.dynamic_data
-        )
+    def nbytes(self):
+        """The number of bytes required to represent all dynamic data."""
+        return sum(dyndata.nbytes for dyndata in self.dynamic_data)

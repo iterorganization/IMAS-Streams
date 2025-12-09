@@ -72,6 +72,109 @@ def _metadata_from_time_slice(time_slice: IDSToplevel, static_paths: list[str]):
 
 
 class StreamingIDSProducer:
+    """Streaming IMAS data producer, which reads data from IDSs.
+
+    This streaming IMAS data producer reads data from IDSs to produce metadata and a
+    data stream in the streaming IMAS format. You can use this producer as follows, see
+    also the examples below:
+
+    1.  Create a new StreamingIDSProducer from an IDS. This IDS must use homogeneous
+        time (``ids_properties.homogeneous_time ==
+        imas.ids_defs.IDS_TIME_MODE_HOMOGENEOUS``), contain a single time slice, and
+        pass coordinate validation (``ids.validate()``).
+
+        You should fill this IDS with:
+
+        - All static data: all data that is not time-dependent, for example the machine
+          description for this IDS. See below explainer on static data.
+        - Placeholders for all dynamic data: ensure that every time-dependent quantity
+          that you want to stream has a placeholder value in the IDS. The value of the
+          placeholder is not used, only the shape of the data (which must remain
+          constant during the stream) is important at this stage.
+
+    2.  Extract the streaming metadata and provide this to the consumer.
+    3.  Create a message for every time slice by providing an IDS with updated dynamic
+        data.
+
+    **Static data**:
+
+    Static data is data that doesn't change during this IMAS data stream. By default it
+    encompasses all data that is marked in the `Data Dictionary
+    <https://imas-data-dictionary.readthedocs.io/en/latest/coordinates.html#static-constant-and-dynamic-nodes>`__
+    as Constant or Static. Data that the Data Dictionary considers Dynamic (i.e.
+    time-dependent) can be manually marked as static: for example, your data contains 2D
+    equilibrium data. The Data Dictionary indicates that the grid coordinates
+    (``time_slice(itime)/profiles_2d(i1)/grid/dim1`` and ``dim2``) are time-dependent.
+    However, if you know that these values don't change for this IMAS stream, you can
+    mark these as static paths. Doing this will reduce the amount of data sent on every
+    time slice, resulting in less communication overhead. See below for an example.
+
+    Examples:
+        .. code-block:: python
+            :caption: Standard usage
+
+            # Step 1:
+            # IDS containing static data and placeholders for dynamic data
+            magnetics = imas.IDSFactory().magnetics()
+            magnetics.ids_properties.homogeneous_time = 1
+            magnetics.time = [0.0]
+            magnetics.flux_loop.resize(2)
+            magnetics.flux_loop[0].position.resize(1)
+            magnetics.flux_loop[0].position[0].r = 2.34
+            magnetics.flux_loop[0].position[0].z = 1.12
+            magnetics.flux_loop[1].position.resize(1)
+            magnetics.flux_loop[1].position[0].r = 2.34
+            magnetics.flux_loop[1].position[0].z = -1.08
+            # Placeholders for dynamic data
+            magnetics.flux_loop[0].flux.data = [0.0]
+            magnetics.flux_loop[1].flux.data = [0.0]
+
+            producer = StreamingIDSProducer(magnetics)
+            # Step 2:
+            metadata = producer.metadata
+            # Send metadata to the consumer
+            ...
+
+            # Step 3:
+            for time in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]:
+                # Update dynamic data:
+                magnetics.time = [time]
+                magnetics.flux_loop[0].flux.data = [1.0 + time]
+                magnetics.flux_loop[1].flux.data = [1.0 - time]
+                # Create a message
+                message = producer.create_message(magnetics)
+                # Send the message to the consumer
+                ...
+
+        .. code-block:: python
+            :caption: Mark additional data as static
+
+            # Get an equilibrium IDS for the first time slice
+            equilibrium = calc_equilibrium(t=0, ...)
+            # We know that the grid is constant, so we don't want to send this with
+            # every time slice
+            static_paths = [
+                "time_slice/profiles_2d/grid/dim1",
+                "time_slice/profiles_2d/grid/dim2",
+            ]
+            # Step 1: create the producer
+            producer = StreamingIDSProducer(equilibrium, static_paths=static_paths)
+
+            # Step 2: Extract metadata and share with consumer
+            metadata = producer.metadata
+            ...
+
+            # Step 3: Create a message for every time slice
+            while True:
+                message = producer.create_message(equilibrium)
+                ...  # Send to consumer
+
+                t += dt
+                if t >= t_stop:
+                    break
+                equilibrium = calc_equilibrium(t=t, ...)
+    """
+
     def __init__(
         self,
         time_slice: IDSToplevel,
@@ -81,13 +184,13 @@ class StreamingIDSProducer:
         self._time_slice = time_slice
         self._metadata = _metadata_from_time_slice(time_slice, static_paths or [])
 
-        self._buffersize = self._metadata.buffersize
+        self._buffersize = self._metadata.nbytes
 
     @property
     def metadata(self) -> StreamingIMASMetadata:
         return self._metadata
 
-    def create_streaming_time_slice(self, time_slice: IDSToplevel) -> bytearray:
+    def create_message(self, time_slice: IDSToplevel) -> bytearray:
         buffer = bytearray(self._buffersize)
         curindex = 0
         for dyndata in self._metadata.dynamic_data:

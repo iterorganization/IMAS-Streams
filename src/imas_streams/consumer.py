@@ -7,15 +7,17 @@ from imas_streams.metadata import StreamingIMASMetadata
 
 
 class StreamingIDSConsumer:
-    """Reader of streaming IMAS data that produces IDSs.
+    """Consumer of streaming IMAS data which outputs IDSs.
+
+    This streaming IMAS data consumer produces an IDS for each time slice.
 
     Example:
         .. code-block:: python
 
             # Create metadata (from JSON):
-            metadata = StreamingMetadata.model_validate_json(json_metadata)
+            metadata = StreamingIMASMetadata.model_validate_json(json_metadata)
             # Create reader
-            reader = StreamingIDSReader(metadata)
+            reader = StreamingIDSConsumer(metadata)
 
             # Consume dynamic data
             for dynamic_data in dynamic_data_stream:
@@ -27,8 +29,7 @@ class StreamingIDSConsumer:
     def __init__(self, metadata: StreamingIMASMetadata):
         self._metadata = metadata
         self._ids = copy.deepcopy(metadata.static_data)
-        nbytes = metadata.buffersize
-        self._buffer = memoryview(bytearray(nbytes))
+        self._buffer = memoryview(bytearray(metadata.nbytes))
         readonly_view = self._buffer.toreadonly()
         dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
 
@@ -77,8 +78,8 @@ class StreamingIDSConsumer:
                     # IDS1 is also updated to the new data2!
                     print(ids1.time.value)  # -> [0.1]
 
-                - You should make any changes to the underlying IDS object, otherwise
-                  their values will no longer update. For example::
+                - You should not make any changes to the underlying IDS object,
+                  otherwise their values will no longer update. For example::
 
                     # Process data for the first time slice:
                     ids = reader.process_message(data, return_copy=False)
