@@ -39,7 +39,8 @@ class StreamingIDSConsumer:
 
             n = np.prod(dyndata.shape, dtype=int)
             dataview = np.frombuffer(readonly_view, dtype=dtype, count=n, offset=idx)
-            ids_node.value = dataview.reshape(dyndata.shape)
+            dataview = dataview.reshape(dyndata.shape)
+            ids_node.value = dataview
             # Verify that IMAS-Python keeps the view of our buffer
             assert ids_node.value is dataview
 

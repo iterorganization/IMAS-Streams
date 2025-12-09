@@ -1,4 +1,5 @@
 import base64
+from collections import Counter
 from typing import Any, Literal
 
 import imas
@@ -8,7 +9,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     field_serializer,
-    model_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -30,19 +31,6 @@ class DynamicData(BaseModel):
     """String representation of the data type."""
 
     model_config = ConfigDict(extra="forbid")
-
-    @model_validator(mode="before")
-    @classmethod
-    def deserialize_dynamicdata(cls, data: Any) -> Any:
-        if isinstance(data, str):
-            return {"path": data, "shape": (), "data_type": "f64"}
-        return data
-
-    @model_serializer(mode="wrap")
-    def serialize_dynamicdata(self, handler) -> dict[str, str] | str:
-        if not self.shape and self.data_type == "f64":
-            return self.path
-        return handler(self)
 
 
 class StreamingIMASMetadata(BaseModel):
@@ -97,6 +85,24 @@ class StreamingIMASMetadata(BaseModel):
                     ) from exc
                 data["static_data"] = ids
         return data
+
+    @field_validator("dynamic_data", mode="after")
+    @classmethod
+    def validate_dynamic_data(cls, value: list[DynamicData]):
+        if not value:
+            raise ValueError("Dynamic Data is missing.")
+        if value[0].path != "time":
+            raise ValueError(
+                f"First dynamic data variable must be 'time', got {value[0].path}."
+            )
+        # Ensure all paths are unique
+        counter = Counter(item.path for item in value)
+        nonunique = ", ".join(path for path, count in counter.items() if count > 1)
+        if nonunique:
+            raise ValueError(
+                f"Dynamic data paths must be unique, but these are not: {nonunique}."
+            )
+        return value
 
     @property
     def buffersize(self):
