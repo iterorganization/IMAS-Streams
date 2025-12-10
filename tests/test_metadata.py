@@ -56,7 +56,7 @@ def magnetics_metadata():
 
 
 def test_metadata(magnetics_metadata):
-    assert magnetics_metadata.buffersize == 7 * 8
+    assert magnetics_metadata.nbytes == 7 * 8
 
     data = vars(magnetics_metadata)
     # Must have dynamic data
