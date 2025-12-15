@@ -1,0 +1,43 @@
+# Integration tests for streaming IDSs
+import imas.training
+import pytest
+
+from imas_streams.consumer import StreamingIDSConsumer
+from imas_streams.producer import StreamingIDSProducer
+
+
+@pytest.fixture(scope="module")
+def testdb():
+    with imas.training.get_training_db_entry() as entry:
+        yield entry
+
+
+def test_stream_core_profiles(testdb):
+    ids_name = "core_profiles"
+    # INT and STR are not supported for streaming, but it is actually static data:
+    static_paths = [
+        "profiles_1d/ion/element/z_n",
+        "profiles_1d/ion/element/atoms_n",
+        "profiles_1d/ion/name",
+        "profiles_1d/ion/neutral_index",
+        "profiles_1d/ion/multiple_states_flag",
+        "profiles_1d/neutral/element/z_n",
+        "profiles_1d/neutral/element/atoms_n",
+        "profiles_1d/neutral/name",
+        "profiles_1d/neutral/ion_index",
+        "profiles_1d/neutral/multiple_states_flag",
+    ]
+
+    times = testdb.get(ids_name, lazy=True).time.value
+
+    first_slice = testdb.get_slice(ids_name, times[0], imas.ids_defs.CLOSEST_INTERP)
+    producer = StreamingIDSProducer(first_slice, static_paths=static_paths)
+    consumer = StreamingIDSConsumer(producer.metadata)
+
+    for t in times:
+        time_slice = testdb.get_slice(ids_name, t, imas.ids_defs.CLOSEST_INTERP)
+        data = producer.create_message(time_slice)
+
+        deserialized = consumer.process_message(data, return_copy=False)
+        # Check that the data is identical
+        assert list(imas.util.idsdiffgen(time_slice, deserialized)) == []

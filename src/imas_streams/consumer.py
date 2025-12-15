@@ -32,20 +32,25 @@ class StreamingIDSConsumer:
         self._buffer = memoryview(bytearray(metadata.nbytes))
         readonly_view = self._buffer.toreadonly()
         dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
+        self._array_view = np.frombuffer(readonly_view, dtype=dtype)
 
+        self._scalars = []
         idx = 0
         for dyndata in metadata.dynamic_data:
             ids_node = self._ids[dyndata.path]
             assert dyndata.data_type == "f64"
+            if ids_node.metadata.ndim == 0:
+                self._scalars.append((dyndata, idx))
+                idx += 1
+                continue
 
             n = np.prod(dyndata.shape, dtype=int)
-            dataview = np.frombuffer(readonly_view, dtype=dtype, count=n, offset=idx)
-            dataview = dataview.reshape(dyndata.shape)
+            dataview = self._array_view[idx : idx + n].reshape(dyndata.shape)
             ids_node.value = dataview
             # Verify that IMAS-Python keeps the view of our buffer
             assert ids_node.value is dataview
 
-            idx += dataview.nbytes
+            idx += n
 
     def process_message(self, data: bytes, *, return_copy: bool = True) -> IDSToplevel:
         """Process a dynamic data message and return the resulting IDS.
@@ -108,6 +113,10 @@ class StreamingIDSConsumer:
 
         # Copy data into our buffer
         self._buffer[:] = data
+        # Copy scalars
+        for dyndata, idx in self._scalars:
+            self._ids[dyndata.path] = self._array_view[idx]
+
         if return_copy:
             return copy.deepcopy(self._ids)
         return self._ids

@@ -51,7 +51,7 @@ def _metadata_from_time_slice(time_slice: IDSToplevel, static_paths: list[str]):
         # Support streaming FLT data only for now
         if node.metadata.data_type is not IDSDataType.FLT:
             raise ValueError(
-                f"Streaming {node.metadata.data_type} is not (yet) supported."
+                f"Streaming {node.metadata.data_type} is not (yet) supported: {node!r}"
             )
 
         # FIXME: get_full_path() doesn't scale well!
@@ -202,7 +202,7 @@ class StreamingIDSProducer:
                     f"current shape: {node.shape}"
                 )
 
-            arr: np.ndarray = node.value
+            arr: np.ndarray = np.asanyarray(node.value)
             if arr.dtype != "<f8":
                 raise ValueError(
                     f"Unexpected data type for {dyndata.path}: {arr.dtype}"
