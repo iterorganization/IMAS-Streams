@@ -86,10 +86,10 @@ def test_streaming_reader_copy(magnetics_metadata):
 
 
 def test_streaming_reader_nocopy(magnetics_metadata):
-    reader = StreamingIDSConsumer(magnetics_metadata)
+    reader = StreamingIDSConsumer(magnetics_metadata, return_copy=False)
     test_data = np.arange(len(magnetics_metadata.dynamic_data), dtype="<f8")
 
-    ids = reader.process_message(test_data.tobytes(), return_copy=False)
+    ids = reader.process_message(test_data.tobytes())
     # Check that we're not allowed to alter array values:
     with pytest.raises(ValueError, match="read-only"):
         ids.time[0] = 1.0
@@ -103,13 +103,7 @@ def test_streaming_reader_nocopy(magnetics_metadata):
     assert len(ids.flux_loop) == 0
 
     # And check that our changes broke everything
-    ids2 = reader.process_message(test_data.tobytes(), return_copy=False)
+    ids2 = reader.process_message(test_data.tobytes())
     assert ids is ids2
-    assert ids2.time[0] == 1.0
-    assert len(ids2.flux_loop) == 0
-
-    # Even when requesting a copy later
-    ids2 = reader.process_message(test_data.tobytes(), return_copy=True)
-    assert ids is not ids2
     assert ids2.time[0] == 1.0
     assert len(ids2.flux_loop) == 0

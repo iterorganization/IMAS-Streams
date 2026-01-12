@@ -3,10 +3,11 @@ import copy
 import numpy as np
 from imas.ids_toplevel import IDSToplevel
 
+from imas_streams.abc import StreamConsumer
 from imas_streams.metadata import StreamingIMASMetadata
 
 
-class StreamingIDSConsumer:
+class StreamingIDSConsumer(StreamConsumer):
     """Consumer of streaming IMAS data which outputs IDSs.
 
     This streaming IMAS data consumer produces an IDS for each time slice.
@@ -26,8 +27,57 @@ class StreamingIDSConsumer:
                 ...
     """
 
-    def __init__(self, metadata: StreamingIMASMetadata):
+    def __init__(self, metadata: StreamingIMASMetadata, *, return_copy: bool = True):
+        """Consumer of streaming IMAS data which outputs IDSs.
+
+        Args:
+            metadata: Metadata of the IMAS data stream.
+
+        Keyword Args:
+            return_copy: By default, a copy of the IDS is returned with each time slice.
+                This incurs some overhead, but produces the correct behaviour when
+                applications make changes to the IDS and/or want to store previous time
+                slices.
+
+                If this argument is set to ``False`` the same IDS object is returned
+                with every call to this ``process_message``, with the underlying data
+                updated. This avoids creating a copy with every call, but will produce
+                incorrect results in some scenarios:
+
+                - Because the same IDS object is returned with every call to this
+                  method, the following does not work::
+
+                    reader = StreamingIDSConsumer(metadata, return_copy=False)
+                    # Process data for the first time slice:
+                    ids1 = reader.process_message(data1)
+                    print(ids1.time.value)  # -> [0.]
+                    ...
+
+                    # Process data for the second time slice:
+                    ids2 = reader.process_message(data2)
+                    print(ids2.time.value)  # -> [0.1]
+                    # IDS1 is also updated to the new data2!
+                    print(ids1.time.value)  # -> [0.1]
+
+                - You should not make any changes to the underlying IDS object,
+                  otherwise their values will no longer update. For example::
+
+                    reader = StreamingIDSConsumer(metadata, return_copy=False)
+                    # Process data for the first time slice:
+                    ids = reader.process_message(data)
+                    print(ids.time.value)  # -> [0.]
+
+                    # Making changes to the IDS will break the update process:
+                    ids.time = [-1.0]
+                    print(ids.time.value)  # -> [-1.]
+
+                    # Process data for the second time slice:
+                    ids = reader.process_message(data)
+                    # The update mechanism is broken!
+                    print(ids.time.value)  # -> [-1.]
+        """
         self._metadata = metadata
+        self._return_copy = return_copy
         self._ids = copy.deepcopy(metadata.static_data)
         self._buffer = memoryview(bytearray(metadata.nbytes))
         readonly_view = self._buffer.toreadonly()
@@ -52,55 +102,11 @@ class StreamingIDSConsumer:
 
             idx += n
 
-    def process_message(self, data: bytes, *, return_copy: bool = True) -> IDSToplevel:
+    def process_message(self, data: bytes | bytearray) -> IDSToplevel:
         """Process a dynamic data message and return the resulting IDS.
 
         Args:
             data: Binary data corresponding to one time slice of dynamic data.
-
-        Keyword Args:
-            return_copy: By default, a copy of the IDS is returned with each time slice.
-                This incurs some overhead, but produces the correct behaviour when
-                applications make changes to the IDS and/or want to store previous time
-                slices.
-
-                If this argument is set to ``False`` the same IDS object is returned
-                with every call to this method, with the underlying data updated. This
-                avoids creating a copy with every call, but will produce incorrect
-                results in some scenarios:
-
-                - Because the same IDS object is returned with every call to this
-                  method, the following does not work::
-
-                    # Process data for the first time slice:
-                    ids1 = reader.process_message(data1, return_copy=False)
-                    print(ids1.time.value)  # -> [0.]
-                    ...
-
-                    # Process data for the second time slice:
-                    ids2 = reader.process_message(data2, return_copy=False)
-                    print(ids2.time.value)  # -> [0.1]
-                    # IDS1 is also updated to the new data2!
-                    print(ids1.time.value)  # -> [0.1]
-
-                - You should not make any changes to the underlying IDS object,
-                  otherwise their values will no longer update. For example::
-
-                    # Process data for the first time slice:
-                    ids = reader.process_message(data, return_copy=False)
-                    print(ids.time.value)  # -> [0.]
-
-                    # Making changes to the IDS will break the update process:
-                    ids.time = [-1.0]
-                    print(ids.time.value)  # -> [-1.]
-
-                    # Process data for the second time slice:
-                    ids = reader.process_message(data, return_copy=False)
-                    # The update mechanism is broken!
-                    print(ids.time.value)  # -> [-1.]
-                    # Even when requesting a copy:
-                    ids = reader.process_message(data, return_copy=True)
-                    print(ids.time.value)  # -> [-1.]
 
         Returns:
             An IDS with both static and dynamic data for the provided time slice.
@@ -117,6 +123,6 @@ class StreamingIDSConsumer:
         for dyndata, idx in self._scalars:
             self._ids[dyndata.path] = self._array_view[idx]
 
-        if return_copy:
+        if self._return_copy:
             return copy.deepcopy(self._ids)
         return self._ids

@@ -32,12 +32,12 @@ def test_stream_core_profiles(testdb):
 
     first_slice = testdb.get_slice(ids_name, times[0], imas.ids_defs.CLOSEST_INTERP)
     producer = StreamingIDSProducer(first_slice, static_paths=static_paths)
-    consumer = StreamingIDSConsumer(producer.metadata)
+    consumer = StreamingIDSConsumer(producer.metadata, return_copy=False)
 
     for t in times:
         time_slice = testdb.get_slice(ids_name, t, imas.ids_defs.CLOSEST_INTERP)
         data = producer.create_message(time_slice)
 
-        deserialized = consumer.process_message(data, return_copy=False)
+        deserialized = consumer.process_message(data)
         # Check that the data is identical
         assert list(imas.util.idsdiffgen(time_slice, deserialized)) == []
