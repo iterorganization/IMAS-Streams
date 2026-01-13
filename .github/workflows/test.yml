@@ -38,4 +38,4 @@ jobs:
           export KAFKA_HOST=localhost:9092
 
           # Run pytest
-          pytest -n=auto --cov=imas_streams --cov-report=term-missing
+          pytest --cov=imas_streams --cov-report=term-missing
