@@ -58,12 +58,18 @@ def test_kafka_producer_consumer(kafka_host, test_magnetics):
         kafka_producer.produce(bytes(message))
 
     kafka_consumer = KafkaConsumer(settings, StreamingIDSConsumer)
-
     for i, ids in enumerate(kafka_consumer.stream(timeout=1)):
         assert ids.time[0] == i
         assert ids.flux_loop[0].name == "test"
         assert ids.flux_loop[0].flux.data[0] == 1 - i / 10
+    assert i == 4  # We should have received 5 messages
 
+    # Check that we can do this again, and pass extra argument to StreamingIDSConsumer
+    kafka_consumer = KafkaConsumer(settings, StreamingIDSConsumer, return_copy=False)
+    for i, ids in enumerate(kafka_consumer.stream(timeout=1)):
+        assert ids.time[0] == i
+        assert ids.flux_loop[0].name == "test"
+        assert ids.flux_loop[0].flux.data[0] == 1 - i / 10
     assert i == 4  # We should have received 5 messages
 
 
