@@ -32,4 +32,10 @@ jobs:
         run: ruff format --diff
 
       - name: Run tests
-        run: pytest -n=auto --cov=imas_streams --cov-report=term-missing
+        run: |
+          # Start Kafka server (with docker):
+          docker run -d -p 9092:9092 apache/kafka:4.1.0
+          export KAFKA_HOST=localhost:9092
+
+          # Run pytest
+          pytest --cov=imas_streams --cov-report=term-missing

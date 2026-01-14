@@ -20,7 +20,8 @@ dynamic = ["version"]
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-all = ["imas-streams[dev]"]
+all = ["imas-streams[kafka,dev]"]
+kafka = ["confluent-kafka"]
 dev = ["imas-streams[test,linting]"]
 linting = [
     "ruff",
