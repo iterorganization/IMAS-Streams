@@ -27,7 +27,7 @@ _STREAMING_HEADER_KEY = "streaming-imas-metadata"
 
 
 class KafkaSettings(BaseModel):
-    """Dynamic data specifier."""
+    """Settings for the Kafka Consumer and Producer."""
 
     host: str
     """The kafka instance ip address (bootstrap servers)."""
@@ -38,7 +38,11 @@ class KafkaSettings(BaseModel):
 
 
 def _create_kafka_topic(settings: KafkaSettings):
-    """Create a new kafka topic."""
+    """Create a new kafka topic.
+
+    This will raise an exception when the topic already exists, or if the topic could
+    not be created (potentially due to missing permissions).
+    """
     conf = {"bootstrap.servers": settings.host}
     admin_client = AdminClient(conf)
 
@@ -67,6 +71,13 @@ class KafkaProducer:
     def __init__(
         self, settings: KafkaSettings, metadata: StreamingIMASMetadata
     ) -> None:
+        """Create a Kafka Consumer.
+
+        This will connect to the Kafka cluster and create a topic to send data to. The
+        streaming IMAS metadata is sent as first message on the topic.
+
+        N.B. An exception is raised when the topic already exists on the Kafka cluster.
+        """
         self._settings = settings
         self._metadata = metadata
         conf = {"bootstrap.servers": settings.host}
@@ -86,6 +97,11 @@ class KafkaProducer:
         )
         self._expected_message_size = self._metadata.nbytes
 
+    def __del__(self):
+        """Cleanup Kafka Producer resources"""
+        # Ensure all messages are sent
+        self._producer.flush()
+
     def produce(self, message: bytes) -> None:
         """Produce a time frame to the configured Kafka topic."""
         if len(message) != self._expected_message_size:
@@ -102,14 +118,49 @@ class KafkaProducer:
 
 
 class KafkaConsumer:
-    """Consumer of streaming IMAS data from a Kafka topic."""
+    """Consumer of streaming IMAS data from a Kafka topic.
+
+    Example:
+        The following example creates a Kafka consumer that attempts to stream data from
+        the ``test`` topic on a kafka instance running on ``localhost:9092``. If the
+        ``test`` topic doesn't exist within 5 seconds, an exception is raised. This
+        consumer will create IDSs (with :py:class:`~imas_streams.StreamingIDSConsumer`).
+        The additional keyword argument (``return_copy=True``) is forwarded to the
+        ``StreamingIDSConsumer``.
+
+        The stream is assumed to end once 10 seconds have passed without new messages.
+
+        .. code-block:: python
+
+            consumer = KafkaConsumer(
+                KafkaSettings(host="localhost:9092", topic="test"),
+                StreamingIDSConsumer,
+                timeout=5,
+                return_copy=True,
+            )
+            for ids in consumer.stream(timeout=10):
+                do_something_with_data(ids)
+    """
 
     def __init__(
         self,
         settings: KafkaSettings,
         stream_consumer_cls: type[StreamConsumer],
+        *,
+        timeout=DEFAULT_KAFKA_CONSUMER_TIMEOUT,
         **stream_consumer_kwargs,
-    ) -> None:  # TODO: type
+    ) -> None:
+        """Create a new KafkaConsumer.
+
+        N.B. This will block until the requested topic is created on the Kafka cluster,
+        or fail after ``timeout`` seconds.
+
+        Args:
+            settings: Kafka host and topic to connect to.
+            stream_consumer_cls: StreamConsumer type used for processing the received
+                messages.
+            timeout: Maximum time (in seconds) to wait for the topic.
+        """
         self._settings = settings
         conf = {
             "bootstrap.servers": settings.host,
@@ -119,14 +170,21 @@ class KafkaConsumer:
         self._consumer = confluent_kafka.Consumer(conf)
 
         # Subscribe to the topic, retry until successful
-        self._metadata = self._subscribe()
+        self._metadata = self._subscribe(timeout)
         self._stream_consumer = stream_consumer_cls(
             self._metadata, **stream_consumer_kwargs
         )
 
-    def _subscribe(
-        self, timeout=DEFAULT_KAFKA_CONSUMER_TIMEOUT
-    ) -> StreamingIMASMetadata:
+    def _subscribe(self, timeout) -> StreamingIMASMetadata:
+        """Subscribe to the requested Kafka topic and receive streaming IMAS metadata.
+
+        Args:
+            timeout: Maximum time (in seconds) to wait for the topic to be created on
+                the Kafka cluster.
+
+        Returns:
+            Streaming IMAS metadata for the subscribed topic.
+        """
         # Wait until the requested topic is available
         start_time = time.monotonic()
         topic_name = self._settings.topic_name
@@ -163,7 +221,8 @@ class KafkaConsumer:
                 messages arrive within this time period after the last received message.
 
         Yields:
-            Binary messages.
+            Data produced by the StreamConsumer, e.g. an IDS for the
+            StreamingIDSConsumer.
         """
         try:
             while True:
