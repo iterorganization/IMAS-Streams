@@ -115,6 +115,7 @@ class KafkaProducer:
             value=message,
             key=self._message_key,
         )
+        self._producer.poll(0)
 
 
 class KafkaConsumer:
