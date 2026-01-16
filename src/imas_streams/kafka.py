@@ -95,6 +95,7 @@ class KafkaProducer:
             key=self._message_key,
             headers={_STREAMING_HEADER_KEY: metadata.metadata_version},
         )
+        self._producer.poll(0)
         self._expected_message_size = self._metadata.nbytes
 
     def __del__(self):
