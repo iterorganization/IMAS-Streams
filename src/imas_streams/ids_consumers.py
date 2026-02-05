@@ -1,13 +1,12 @@
 import copy
 
-import numpy as np
 from imas.ids_toplevel import IDSToplevel
 
-from imas_streams.abc import StreamConsumer
+from imas_streams.consumer_util import MessageProcessor
 from imas_streams.metadata import StreamingIMASMetadata
 
 
-class StreamingIDSConsumer(StreamConsumer):
+class StreamingIDSConsumer:
     """Consumer of streaming IMAS data which outputs IDSs.
 
     This streaming IMAS data consumer produces an IDS for each time slice.
@@ -79,28 +78,18 @@ class StreamingIDSConsumer(StreamConsumer):
         self._metadata = metadata
         self._return_copy = return_copy
         self._ids = copy.deepcopy(metadata.static_data)
-        self._buffer = memoryview(bytearray(metadata.nbytes))
-        readonly_view = self._buffer.toreadonly()
-        dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
-        self._array_view = np.frombuffer(readonly_view, dtype=dtype)
+        self._processor = MessageProcessor(metadata)
 
         self._scalars = []
-        idx = 0
-        for dyndata in metadata.dynamic_data:
+        views = self._processor.get_array_views()
+        for dyndata, dataview in zip(metadata.dynamic_data, views, strict=True):
             ids_node = self._ids[dyndata.path]
-            assert dyndata.data_type == "f64"
             if ids_node.metadata.ndim == 0:
-                self._scalars.append((dyndata, idx))
-                idx += 1
-                continue
-
-            n = np.prod(dyndata.shape, dtype=int)
-            dataview = self._array_view[idx : idx + n].reshape(dyndata.shape)
-            ids_node.value = dataview
-            # Verify that IMAS-Python keeps the view of our buffer
-            assert ids_node.value is dataview
-
-            idx += n
+                self._scalars.append((dyndata, dataview))
+            else:
+                ids_node.value = dataview
+                # Verify that IMAS-Python keeps the view of our buffer
+                assert ids_node.value is dataview
 
     def process_message(self, data: bytes | bytearray) -> IDSToplevel:
         """Process a dynamic data message and return the resulting IDS.
@@ -111,17 +100,11 @@ class StreamingIDSConsumer(StreamConsumer):
         Returns:
             An IDS with both static and dynamic data for the provided time slice.
         """
-        if len(data) != len(self._buffer):
-            raise ValueError(
-                f"Unexpected size of data: {len(data)}. "
-                f"Was expecting {len(self._buffer)}."
-            )
+        self._processor.set_data(data)
 
-        # Copy data into our buffer
-        self._buffer[:] = data
         # Copy scalars
-        for dyndata, idx in self._scalars:
-            self._ids[dyndata.path] = self._array_view[idx]
+        for dyndata, dataview in self._scalars:
+            self._ids[dyndata.path] = dataview
 
         if self._return_copy:
             return copy.deepcopy(self._ids)

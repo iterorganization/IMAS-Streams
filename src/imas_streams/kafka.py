@@ -8,8 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from imas_streams.abc import StreamConsumer
 from imas_streams.metadata import StreamingIMASMetadata
+from imas_streams.protocols import StreamConsumer
 
 logger = logging.getLogger(__name__)
 
