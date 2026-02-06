@@ -3,11 +3,45 @@ import copy
 import numpy as np
 from imas.ids_toplevel import IDSToplevel
 
-from imas_streams.abc import StreamConsumer
 from imas_streams.metadata import StreamingIMASMetadata
 
 
-class StreamingIDSConsumer(StreamConsumer):
+class MessageProcessor:
+    """Logic for building data arrays from streaming IMAS messages"""
+
+    def __init__(self, metadata: "StreamingIMASMetadata"):
+        self._metadata = metadata
+        self._msg_buffer = memoryview(bytearray(metadata.nbytes))
+        readonly_view = self._msg_buffer.toreadonly()
+        dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
+        self._array_view = np.frombuffer(readonly_view, dtype=dtype)
+
+    def get_array_views(self) -> list[np.ndarray]:
+        """Get list of readonly array views of the streamed data.
+        Each item in the list corresponds to the entry in metadata.dynamic_data with the
+        same index.
+        """
+        array_views = []
+        idx = 0
+        for dyndata in self._metadata.dynamic_data:
+            assert dyndata.data_type == "f64"
+            n = np.prod(dyndata.shape, dtype=int)
+            dataview = self._array_view[idx : idx + n].reshape(dyndata.shape)
+            array_views.append(dataview)
+            idx += n
+        return array_views
+
+    def set_data(self, data: bytes | bytearray) -> None:
+        """Update array views with data from a new message."""
+        if len(data) != len(self._msg_buffer):
+            raise ValueError(
+                f"Unexpected size of data: {len(data)}. "
+                f"Was expecting {len(self._msg_buffer)}."
+            )
+        self._msg_buffer[:] = data
+
+
+class StreamingIDSConsumer:
     """Consumer of streaming IMAS data which outputs IDSs.
 
     This streaming IMAS data consumer produces an IDS for each time slice.
@@ -27,7 +61,9 @@ class StreamingIDSConsumer(StreamConsumer):
                 ...
     """
 
-    def __init__(self, metadata: StreamingIMASMetadata, *, return_copy: bool = True):
+    def __init__(
+        self, metadata: StreamingIMASMetadata, *, return_copy: bool = True
+    ) -> None:
         """Consumer of streaming IMAS data which outputs IDSs.
 
         Args:
@@ -79,28 +115,18 @@ class StreamingIDSConsumer(StreamConsumer):
         self._metadata = metadata
         self._return_copy = return_copy
         self._ids = copy.deepcopy(metadata.static_data)
-        self._buffer = memoryview(bytearray(metadata.nbytes))
-        readonly_view = self._buffer.toreadonly()
-        dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
-        self._array_view = np.frombuffer(readonly_view, dtype=dtype)
+        self._processor = MessageProcessor(metadata)
 
         self._scalars = []
-        idx = 0
-        for dyndata in metadata.dynamic_data:
+        views = self._processor.get_array_views()
+        for dyndata, dataview in zip(metadata.dynamic_data, views, strict=True):
             ids_node = self._ids[dyndata.path]
-            assert dyndata.data_type == "f64"
             if ids_node.metadata.ndim == 0:
-                self._scalars.append((dyndata, idx))
-                idx += 1
-                continue
-
-            n = np.prod(dyndata.shape, dtype=int)
-            dataview = self._array_view[idx : idx + n].reshape(dyndata.shape)
-            ids_node.value = dataview
-            # Verify that IMAS-Python keeps the view of our buffer
-            assert ids_node.value is dataview
-
-            idx += n
+                self._scalars.append((dyndata, dataview))
+            else:
+                ids_node.value = dataview
+                # Verify that IMAS-Python keeps the view of our buffer
+                assert ids_node.value is dataview
 
     def process_message(self, data: bytes | bytearray) -> IDSToplevel:
         """Process a dynamic data message and return the resulting IDS.
@@ -111,17 +137,11 @@ class StreamingIDSConsumer(StreamConsumer):
         Returns:
             An IDS with both static and dynamic data for the provided time slice.
         """
-        if len(data) != len(self._buffer):
-            raise ValueError(
-                f"Unexpected size of data: {len(data)}. "
-                f"Was expecting {len(self._buffer)}."
-            )
+        self._processor.set_data(data)
 
-        # Copy data into our buffer
-        self._buffer[:] = data
         # Copy scalars
-        for dyndata, idx in self._scalars:
-            self._ids[dyndata.path] = self._array_view[idx]
+        for dyndata, dataview in self._scalars:
+            self._ids[dyndata.path] = dataview
 
         if self._return_copy:
             return copy.deepcopy(self._ids)

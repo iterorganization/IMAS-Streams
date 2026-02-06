@@ -2,8 +2,7 @@
 import imas.training
 import pytest
 
-from imas_streams.consumer import StreamingIDSConsumer
-from imas_streams.producer import StreamingIDSProducer
+from imas_streams import StreamingIDSConsumer, StreamingIDSProducer
 
 
 @pytest.fixture(scope="module")
