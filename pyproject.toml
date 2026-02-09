@@ -31,7 +31,7 @@ test = [
     "pytest-cov",
     "pytest-xdist",
     "pytest-randomly",
-    "imaspy[xarray]",
+    "imas-python[xarray]",
 ]
 
 [project.urls]
