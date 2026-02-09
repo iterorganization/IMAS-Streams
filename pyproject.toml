@@ -53,6 +53,7 @@ testpaths = [
 ]
 addopts = [
     "--doctest-modules",
+    "--import-mode=importlib",
 ]
 
 [tool.ruff]
