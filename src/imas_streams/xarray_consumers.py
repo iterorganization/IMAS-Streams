@@ -84,6 +84,8 @@ class StreamingXArrayConsumer:
         for dyndata in metadata.dynamic_data:
             ids[dyndata.path].value = np.zeros(dyndata.shape)
         self._dataset = to_xarray(ids)
+        # pandas is optional (through IMAS-Python), so import locally
+        from pandas import Index
 
         # Setup array view buffer
         buffersize = 0
@@ -101,6 +103,7 @@ class StreamingXArrayConsumer:
         # Setup array views
         tensor_idx = 0
         to_update = {}
+        tensorviews = {}
         for path in tensorized_paths:
             xrda = self._dataset[path]
             # Fill tensor buffer with initial values of data array
@@ -109,11 +112,16 @@ class StreamingXArrayConsumer:
             # And put a readonly view of the tensor buffer back
             buffer = readonly_view[tensor_idx : tensor_idx + size]
             tensorview = np.frombuffer(buffer, dtype=dtype).reshape(xrda.shape)
+            tensorviews[path] = tensorview
+            if path in self._dataset.indexes:
+                # Prevent xarray from creating a copy of the data:
+                tensorview = Index(tensorview, copy=False)
             to_update[path] = (xrda.dims, tensorview)
             tensor_idx += size
         self._dataset = self._dataset.assign(to_update)
-        for path, (_, tensorview) in to_update.items():
-            assert self._dataset[path].data is tensorview
+        # Check that all data arrays are indeed views of our tensor buffer:
+        for path, tensorview in tensorviews.items():
+            assert np_address_of(self._dataset[path].data) == np_address_of(tensorview)
 
         # Set up the index array for writing received messages into the tensor buffer:
         self._index_array = np.zeros(metadata.nbytes // 8, dtype=int)
