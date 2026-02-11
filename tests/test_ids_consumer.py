@@ -3,8 +3,9 @@ import os
 import imas
 import numpy as np
 import pytest
+from imas.ids_defs import IDS_TIME_MODE_HOMOGENEOUS
 
-from imas_streams import StreamingIDSConsumer, StreamingIMASMetadata
+from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer, StreamingIMASMetadata
 from imas_streams.metadata import DynamicData
 
 DD_VERSION = os.getenv("IMAS_VERSION", "4.0.0")
@@ -14,7 +15,7 @@ DD_VERSION = os.getenv("IMAS_VERSION", "4.0.0")
 def magnetics_metadata():
     ids = imas.IDSFactory(DD_VERSION).new("magnetics")
 
-    ids.ids_properties.homogeneous_time = imas.ids_defs.IDS_TIME_MODE_HOMOGENEOUS
+    ids.ids_properties.homogeneous_time = IDS_TIME_MODE_HOMOGENEOUS
     ids.time = [0.0]
 
     ids.flux_loop.resize(5)
@@ -107,3 +108,29 @@ def test_streaming_reader_nocopy(magnetics_metadata):
     assert ids is ids2
     assert ids2.time[0] == 1.0
     assert len(ids2.flux_loop) == 0
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 5, 10, 20])
+def test_batched_reader(magnetics_metadata, batch_size):
+    reader = BatchedIDSConsumer(magnetics_metadata, batch_size)
+
+    # Pretend sending 20 messages
+    for i in range(20):
+        test_data = np.arange(len(magnetics_metadata.dynamic_data), dtype="<f8") + i
+
+        ids = reader.process_message(test_data.tobytes())
+        # Only expect a result after batch_size items are processed
+        if ids is None:
+            assert (i + 1) % batch_size != 0
+            continue
+
+        expected_time = np.arange(batch_size, dtype=float) + (i + 1 - batch_size)
+        assert len(expected_time) == batch_size
+        assert np.array_equal(ids.time, expected_time)
+
+        assert np.array_equal(ids.flux_loop[0].flux.data, expected_time + 1)
+        assert np.array_equal(ids.flux_loop[1].flux.data, expected_time + 2)
+        assert np.array_equal(ids.flux_loop[2].flux.data, expected_time + 3)
+        assert np.array_equal(ids.flux_loop[3].flux.data, expected_time + 4)
+        assert np.array_equal(ids.flux_loop[4].flux.data, expected_time + 5)
+        assert np.array_equal(ids.flux_loop[0].voltage.data, expected_time + 6)

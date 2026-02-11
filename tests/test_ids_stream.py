@@ -3,8 +3,7 @@ import imas.training
 import pytest
 from imas.ids_defs import CLOSEST_INTERP
 
-from imas_streams import StreamingIDSConsumer, StreamingIDSProducer
-from imas_streams.ids_consumers import BatchedIDSConsumser
+from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer, StreamingIDSProducer
 from imas_streams.xarray_consumers import StreamingXArrayConsumer
 
 
@@ -50,7 +49,7 @@ def test_stream_core_profiles_batched(testdb):
     times = testdb.get(ids_name, lazy=True).time.value
     first_slice = testdb.get_slice(ids_name, times[0], CLOSEST_INTERP)
     producer = StreamingIDSProducer(first_slice, static_paths=cp_static_paths)
-    consumer = BatchedIDSConsumser(producer.metadata, len(times), return_copy=False)
+    consumer = BatchedIDSConsumer(producer.metadata, len(times), return_copy=False)
 
     for i, t in enumerate(times):
         time_slice = testdb.get_slice(ids_name, t, CLOSEST_INTERP)

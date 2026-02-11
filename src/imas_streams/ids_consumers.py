@@ -1,11 +1,9 @@
 import copy
 
 import numpy as np
-from imas.ids_primitive import IDSPrimitive
-from imas.ids_struct_array import IDSStructArray
 from imas.ids_toplevel import IDSToplevel
-from imas.util import get_parent
 
+from imas_streams.imas_utils import get_dynamic_aos_ancestor, get_path_from_aos
 from imas_streams.metadata import StreamingIMASMetadata
 
 
@@ -151,28 +149,7 @@ class StreamingIDSConsumer:
         return self._ids
 
 
-# TODO: MOVE?
-def get_dynamic_aos_parent(ids_node: IDSPrimitive) -> IDSStructArray:
-    node = get_parent(ids_node)
-    while node is not None and (
-        not isinstance(node, IDSStructArray)
-        or not node.metadata.coordinates[0].is_time_coordinate
-    ):
-        node = get_parent(node)
-    if node is None:
-        raise RuntimeError(
-            f"IDS node {ids_node} is not part of a time-dependent Array of Structures."
-        )
-    return node
-
-
-def get_path_from_aos(path: str, aos: IDSStructArray) -> str:
-    path_parts = path.split("/")
-    aos_parts = aos.metadata.path.parts
-    return "/".join(path_parts[len(aos_parts) :])
-
-
-class BatchedIDSConsumser:
+class BatchedIDSConsumer:
     """Consumer of streaming IMAS data which outputs IDSs.
 
     This streaming IMAS data consumer produces an IDS for every N time slices.
@@ -183,10 +160,12 @@ class BatchedIDSConsumser:
             # Create metadata (from JSON):
             metadata = StreamingIMASMetadata.model_validate_json(json_metadata)
             # Create reader
-            reader = StreamingIDSConsumer(metadata)
+            reader = BatchedIDSConsumer(metadata, batch_size=100)
 
             # Consume dynamic data
             for dynamic_data in dynamic_data_stream:
+                # process_message returns an IDS after every 100 (=batch_size) messages
+                # and None otherwise:
                 ids = reader.process_message(dynamic_data)
                 if ids is not None:
                     # Use IDS
@@ -243,7 +222,7 @@ class BatchedIDSConsumser:
                 assert ids_node.value is dataview
             else:
                 # This is a dynamic variable inside a time-dependent AoS: find that aos
-                aos = get_dynamic_aos_parent(ids_node)
+                aos = get_dynamic_aos_ancestor(ids_node)
                 # First ensure there's an entry for every batch_size time slices:
                 if len(aos) != batch_size:
                     assert len(aos) == 1
@@ -265,6 +244,12 @@ class BatchedIDSConsumser:
             idx += n
 
     def process_message(self, data: bytes | bytearray) -> IDSToplevel | None:
+        """Process a single streaming IMAS message.
+
+        This method returns None until a full batch is completed. Once ``batch_size``
+        messages are processed a single IDSToplevel is returned, which contains all data
+        from the ``batch_size`` messages.
+        """
         nbytes = self._metadata.nbytes
         if len(data) != nbytes:
             raise ValueError(
