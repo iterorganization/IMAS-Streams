@@ -193,7 +193,8 @@ class BatchedIDSConsumer:
         self._ids = copy.deepcopy(metadata.static_data)
         self._cur_idx = 0
 
-        self._buffer = memoryview(bytearray(metadata.nbytes * batch_size))
+        self._msg_bytes = metadata.nbytes
+        self._buffer = memoryview(bytearray(self._msg_bytes * batch_size))
         readonly_view = self._buffer.toreadonly()
         dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
         self._array_view = np.frombuffer(readonly_view, dtype=dtype).reshape(
@@ -250,7 +251,7 @@ class BatchedIDSConsumer:
         messages are processed a single IDSToplevel is returned, which contains all data
         from the ``batch_size`` messages.
         """
-        nbytes = self._metadata.nbytes
+        nbytes = self._msg_bytes
         if len(data) != nbytes:
             raise ValueError(
                 f"Unexpected size of data: {len(data)}. Was expecting {nbytes}."
