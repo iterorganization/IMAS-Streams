@@ -148,6 +148,10 @@ class StreamingIDSConsumer:
             return copy.deepcopy(self._ids)
         return self._ids
 
+    def finalize(self) -> None:
+        """Indicate that the final message is received and return any remaining data."""
+        return None  # No data remaining
+
 
 class BatchedIDSConsumer:
     """Consumer of streaming IMAS data which outputs IDSs.
@@ -192,6 +196,7 @@ class BatchedIDSConsumer:
         self._return_copy = return_copy
         self._ids = copy.deepcopy(metadata.static_data)
         self._cur_idx = 0
+        self._finished = False
 
         self._msg_bytes = metadata.nbytes
         self._buffer = memoryview(bytearray(self._msg_bytes * batch_size))
@@ -209,9 +214,8 @@ class BatchedIDSConsumer:
             ids_node = self._ids[dyndata.path]
             assert ids_node.metadata.type.is_dynamic
             n = np.prod(dyndata.shape, dtype=int)
-            if (
-                dyndata.path == "time"
-                or ids_node.metadata.ndim
+            if dyndata.path == "time" or (
+                ids_node.metadata.ndim
                 and ids_node.metadata.coordinates[0].is_time_coordinate
             ):
                 # Great! This IDS node is time-dependent by itself, and we can create a
@@ -251,6 +255,8 @@ class BatchedIDSConsumer:
         messages are processed a single IDSToplevel is returned, which contains all data
         from the ``batch_size`` messages.
         """
+        if self._finished:
+            raise RuntimeError("")
         nbytes = self._msg_bytes
         if len(data) != nbytes:
             raise ValueError(
@@ -272,3 +278,35 @@ class BatchedIDSConsumer:
             return self._ids
         # Batch is not finished yet
         return None
+
+    def finalize(self) -> IDSToplevel | None:
+        """Indicate that the final message is received and return any remaining data.
+
+        Returns:
+            IDS with as many time slices as were remaining, or None in case no data was
+            remaining.
+        """
+        self._finished = True
+        n_time = self._cur_idx
+        if n_time == 0:
+            return None  # No data remaining, easy!
+
+        # Resize dynamic quantities in the IDS:
+        for dyndata in self._metadata.dynamic_data:
+            ids_node = self._ids[dyndata.path]
+            if dyndata.path == "time" or (
+                ids_node.metadata.ndim
+                and ids_node.metadata.coordinates[0].is_time_coordinate
+            ):
+                # Great! This IDS node is time-dependent by itself, and we just need to
+                # create a smaller view of the data:
+                ids_node.value = ids_node.value[:n_time]
+            else:
+                # This is a dynamic variable inside a time-dependent AoS: find that aos
+                aos = get_dynamic_aos_ancestor(ids_node)
+                # And resize it:
+                if len(aos) != n_time:
+                    assert len(aos) == self._batch_size
+                    aos.resize(n_time, keep=True)
+
+        return self._ids

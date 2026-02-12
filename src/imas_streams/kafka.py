@@ -235,6 +235,10 @@ class KafkaConsumer:
                         self._settings.topic_name,
                         timeout,
                     )
+                    # Yield any remaining data
+                    result = self._stream_consumer.finalize()
+                    if result is not None:
+                        yield result
                     break
                 if msg.error():
                     raise msg.error()
