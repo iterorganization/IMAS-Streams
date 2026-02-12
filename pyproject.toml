@@ -31,6 +31,7 @@ test = [
     "pytest-cov",
     "pytest-xdist",
     "pytest-randomly",
+    "imas-python[xarray]",
 ]
 
 [project.urls]
@@ -48,6 +49,11 @@ local_scheme = "no-local-version"
 [tool.pytest.ini_options]
 testpaths = [
     "tests",
+    "src",
+]
+addopts = [
+    "--doctest-modules",
+    "--import-mode=importlib",
 ]
 
 [tool.ruff]
