@@ -3,7 +3,7 @@ import imas.training
 import pytest
 from imas.ids_defs import CLOSEST_INTERP
 
-from imas_streams import StreamingIDSConsumer, StreamingIDSProducer
+from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer, StreamingIDSProducer
 from imas_streams.xarray_consumers import StreamingXArrayConsumer
 
 
@@ -42,6 +42,28 @@ def test_stream_core_profiles(testdb):
         deserialized = consumer.process_message(data)
         # Check that the data is identical
         assert list(imas.util.idsdiffgen(time_slice, deserialized)) == []
+
+
+def test_stream_core_profiles_batched(testdb):
+    ids_name = "core_profiles"
+    times = testdb.get(ids_name, lazy=True).time.value
+    first_slice = testdb.get_slice(ids_name, times[0], CLOSEST_INTERP)
+    producer = StreamingIDSProducer(first_slice, static_paths=cp_static_paths)
+    consumer = BatchedIDSConsumer(producer.metadata, len(times), return_copy=False)
+
+    for i, t in enumerate(times):
+        time_slice = testdb.get_slice(ids_name, t, CLOSEST_INTERP)
+        data = producer.create_message(time_slice)
+
+        deserialized = consumer.process_message(data)
+        if i != len(times) - 1:
+            assert deserialized is None
+
+    # Compare against full IDS
+    ids = testdb.get(ids_name)
+    # Check that the data is identical
+    assert deserialized is not None
+    assert list(imas.util.idsdiffgen(ids, deserialized)) == []
 
 
 def test_stream_core_profiles_xarray(testdb):

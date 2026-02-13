@@ -3,13 +3,14 @@ import copy
 import numpy as np
 from imas.ids_toplevel import IDSToplevel
 
+from imas_streams.imas_utils import get_dynamic_aos_ancestor, get_path_from_aos
 from imas_streams.metadata import StreamingIMASMetadata
 
 
 class MessageProcessor:
     """Logic for building data arrays from streaming IMAS messages"""
 
-    def __init__(self, metadata: "StreamingIMASMetadata"):
+    def __init__(self, metadata: StreamingIMASMetadata):
         self._metadata = metadata
         self._msg_buffer = memoryview(bytearray(metadata.nbytes))
         readonly_view = self._msg_buffer.toreadonly()
@@ -142,6 +143,171 @@ class StreamingIDSConsumer:
         # Copy scalars
         for dyndata, dataview in self._scalars:
             self._ids[dyndata.path] = dataview
+
+        if self._return_copy:
+            return copy.deepcopy(self._ids)
+        return self._ids
+
+    def finalize(self) -> None:
+        """Indicate that the final message is received and return any remaining data."""
+        return None  # No data remaining
+
+
+class BatchedIDSConsumer:
+    """Consumer of streaming IMAS data which outputs IDSs.
+
+    This streaming IMAS data consumer produces an IDS for every N time slices.
+
+    Example:
+        .. code-block:: python
+
+            # Create metadata (from JSON):
+            metadata = StreamingIMASMetadata.model_validate_json(json_metadata)
+            # Create reader
+            reader = BatchedIDSConsumer(metadata, batch_size=100)
+
+            # Consume dynamic data
+            for dynamic_data in dynamic_data_stream:
+                # process_message returns an IDS after every 100 (=batch_size) messages
+                # and None otherwise:
+                ids = reader.process_message(dynamic_data)
+                if ids is not None:
+                    # Use IDS
+                    ...
+    """
+
+    def __init__(
+        self, metadata: StreamingIMASMetadata, batch_size: int, *, return_copy=True
+    ) -> None:
+        """Consumer of streaming IMAS data which outputs IDSs.
+
+        Args:
+            metadata: Metadata of the IMAS data stream.
+            batch_size: Number of time slices to batch in each returned IDS.
+
+        Keyword Args:
+            return_copy: See the description in StreamingIDSConsumer
+        """
+        if batch_size < 1:
+            raise ValueError(f"Invalid batch size: {batch_size}")
+
+        self._metadata = metadata
+        self._batch_size = batch_size
+        self._return_copy = return_copy
+        self._ids = copy.deepcopy(metadata.static_data)
+        self._cur_idx = 0
+        self._finished = False
+
+        self._msg_bytes = metadata.nbytes
+        self._buffer = memoryview(bytearray(self._msg_bytes * batch_size))
+        readonly_view = self._buffer.toreadonly()
+        dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
+        self._array_view = np.frombuffer(readonly_view, dtype=dtype).reshape(
+            (batch_size, -1)
+        )
+
+        # Setup array views for batched data
+        self._scalars = []
+        idx = 0
+        for dyndata in self._metadata.dynamic_data:
+            assert dyndata.data_type == "f64"
+            ids_node = self._ids[dyndata.path]
+            assert ids_node.metadata.type.is_dynamic
+            n = np.prod(dyndata.shape, dtype=int)
+            if dyndata.path == "time" or (
+                ids_node.metadata.ndim
+                and ids_node.metadata.coordinates[0].is_time_coordinate
+            ):
+                # Great! This IDS node is time-dependent by itself, and we can create a
+                # single view for it:
+                new_shape = (batch_size,) + dyndata.shape[1:]
+                dataview = self._array_view[:, idx : idx + n].reshape(new_shape)
+                ids_node.value = dataview
+                # Verify that IMAS-Python keeps the view of our buffer
+                assert ids_node.value is dataview
+            else:
+                # This is a dynamic variable inside a time-dependent AoS: find that aos
+                aos = get_dynamic_aos_ancestor(ids_node)
+                # First ensure there's an entry for every batch_size time slices:
+                if len(aos) != batch_size:
+                    assert len(aos) == 1
+                    aos.resize(batch_size, keep=True)
+                    for i in range(1, batch_size):
+                        aos[i] = copy.deepcopy(aos[0])
+                path_from_aos = get_path_from_aos(dyndata.path, aos)
+                if ids_node.metadata.ndim == 0:
+                    # This is a scalar node
+                    self._scalars.append((aos, path_from_aos, idx))
+                else:
+                    # Loop over all time slices and create views:
+                    for i in range(batch_size):
+                        dataview = self._array_view[i, idx : idx + n]
+                        aos[i][path_from_aos].value = dataview
+                        # Verify that IMAS-Python keeps the view of our buffer
+                        assert aos[i][path_from_aos].value is dataview
+
+            idx += n
+
+    def process_message(self, data: bytes | bytearray) -> IDSToplevel | None:
+        """Process a single streaming IMAS message.
+
+        This method returns None until a full batch is completed. Once ``batch_size``
+        messages are processed a single IDSToplevel is returned, which contains all data
+        from the ``batch_size`` messages.
+        """
+        if self._finished:
+            raise RuntimeError("")
+        nbytes = self._msg_bytes
+        if len(data) != nbytes:
+            raise ValueError(
+                f"Unexpected size of data: {len(data)}. Was expecting {nbytes}."
+            )
+        # Update buffer
+        self._buffer[self._cur_idx * nbytes : (self._cur_idx + 1) * nbytes] = data
+        # Set scalar values
+        for aos, path_from_aos, idx in self._scalars:
+            aos[self._cur_idx][path_from_aos] = self._array_view[self._cur_idx, idx]
+
+        # Bookkeeping
+        self._cur_idx += 1
+        if self._cur_idx == self._batch_size:
+            # Completed a batch:
+            self._cur_idx = 0
+            if self._return_copy:
+                return copy.deepcopy(self._ids)
+            return self._ids
+        # Batch is not finished yet
+        return None
+
+    def finalize(self) -> IDSToplevel | None:
+        """Indicate that the final message is received and return any remaining data.
+
+        Returns:
+            IDS with as many time slices as were remaining, or None in case no data was
+            remaining.
+        """
+        self._finished = True
+        n_time = self._cur_idx
+        if n_time == 0:
+            return None  # No data remaining, easy!
+
+        # Resize dynamic quantities in the IDS:
+        for dyndata in self._metadata.dynamic_data:
+            ids_node = self._ids[dyndata.path]
+            if dyndata.path == "time" or (
+                ids_node.metadata.ndim
+                and ids_node.metadata.coordinates[0].is_time_coordinate
+            ):
+                # Great! This IDS node is time-dependent by itself, and we just need to
+                # create a smaller view of the data:
+                ids_node.value = ids_node.value[:n_time]
+            else:
+                # This is a dynamic variable inside a time-dependent AoS: find that aos
+                aos = get_dynamic_aos_ancestor(ids_node)
+                # And resize it:
+                if len(aos) != n_time:
+                    assert len(aos) == self._batch_size
+                    aos.resize(n_time, keep=True)
 
         if self._return_copy:
             return copy.deepcopy(self._ids)

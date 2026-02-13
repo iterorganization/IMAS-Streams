@@ -161,3 +161,7 @@ class StreamingXArrayConsumer:
         self._msg_buffer[:] = data
         self._tensor_buffer[self._index_array] = self._array_view
         return self._dataset
+
+    def finalize(self) -> None:
+        """Indicate that the final message is received and return any remaining data."""
+        return None  # No data remaining
