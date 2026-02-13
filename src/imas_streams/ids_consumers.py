@@ -309,4 +309,6 @@ class BatchedIDSConsumer:
                     assert len(aos) == self._batch_size
                     aos.resize(n_time, keep=True)
 
+        if self._return_copy:
+            return copy.deepcopy(self._ids)
         return self._ids

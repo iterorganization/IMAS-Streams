@@ -225,6 +225,9 @@ class KafkaConsumer:
         Yields:
             Data produced by the StreamConsumer, e.g. an IDS for the
             StreamingIDSConsumer.
+
+            For batching consumers (such as the BatchingIDSConsumer) the last yielded
+            value may contain fewer time slices than the batch size.
         """
         try:
             while True:
