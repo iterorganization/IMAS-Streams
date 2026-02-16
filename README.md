@@ -7,6 +7,36 @@ Producers and consumers of streaming IMAS data.
 This project is in active development and may introduce breaking changes at any
 moment.
 
+## Installation
+
+IMAS-Streams is not yet available on PyPI, but you can install it directly from
+this git repository:
+
+```bash
+pip install 'imas-streams @ git+https://github.com/iterorganization/IMAS-Streams.git'
+# If you wish to use the kafka features:
+pip install 'imas-streams[kafka] @ git+https://github.com/iterorganization/IMAS-Streams.git'
+```
+
+## Command line interface
+
+IMAS-Streams comes with a command line interface: the program `imas-streams`
+should be available after installation. Note that some commands may require the
+optional `kafka` dependency, see [Installation](#Installation).
+
+```bash
+imas-streams --version  # display version of installed imas-streams library
+imas-streams --help     # display help message and list available commands
+```
+
+## Application programming interface (API)
+
+API documentation is not yet available. The code is self-documented with
+docstrings. All classes directly available in the
+[`imas_streams`](src/imas_streams/__init__.py) and
+[`imas_streams.kafka`](src/imas_streams/kafka.py) modules are considered public
+API.
+
 ## Design goal and use cases
 
 The goal of this project is to define a way to efficiently stream
