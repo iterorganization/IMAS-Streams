@@ -42,6 +42,7 @@ where = ["src"]
 include = ["imas_streams*"]
 
 [project.scripts]
+imas-streams = "imas_streams.cli:main"
 
 [tool.setuptools_scm]
 local_scheme = "no-local-version"
