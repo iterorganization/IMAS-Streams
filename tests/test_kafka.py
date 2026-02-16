@@ -4,6 +4,7 @@ import os
 
 import imas
 import pytest
+from imas.ids_defs import IDS_TIME_MODE_HOMOGENEOUS
 
 pytest.importorskip("confluent_kafka")
 
@@ -26,7 +27,7 @@ def kafka_host():
 @pytest.fixture
 def test_magnetics():
     ids = imas.IDSFactory().magnetics()
-    ids.ids_properties.homogeneous_time = imas.ids_defs.IDS_TIME_MODE_HOMOGENEOUS
+    ids.ids_properties.homogeneous_time = IDS_TIME_MODE_HOMOGENEOUS
     ids.time = [1.0]
     ids.flux_loop.resize(1)
     ids.flux_loop[0].name = "test"
