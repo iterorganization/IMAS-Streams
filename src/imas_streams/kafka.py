@@ -26,6 +26,7 @@ DEFAULT_KAFKA_CONSUMER_TIMEOUT = 60  # seconds
 _INITIAL_BACKOFF_TIME = 0.02  # seconds
 _MAXIMUM_BACKOFF_TIME = 1.0  # seconds
 _STREAMING_HEADER_KEY = "streaming-imas-metadata"
+_FETCH_WAIT_MAX_MS = 50
 
 
 class KafkaSettings(BaseModel):
@@ -151,7 +152,8 @@ class KafkaConsumer:
         settings: KafkaSettings,
         stream_consumer_cls: type[StreamConsumer],
         *,
-        timeout=DEFAULT_KAFKA_CONSUMER_TIMEOUT,
+        timeout: int = DEFAULT_KAFKA_CONSUMER_TIMEOUT,
+        most_recent_only: bool = False,
         **stream_consumer_kwargs,
     ) -> None:
         """Create a new KafkaConsumer.
@@ -166,10 +168,14 @@ class KafkaConsumer:
             timeout: Maximum time (in seconds) to wait for the topic.
         """
         self._settings = settings
+        self._most_recent_only = most_recent_only
         conf = {
             "bootstrap.servers": settings.host,
             "auto.offset.reset": "earliest",
             "group.id": str(uuid.uuid4()),
+            # This influences the latency of receiving messages. Also impacts the seek()
+            # in self._fast_forward()!
+            "fetch.wait.max.ms": _FETCH_WAIT_MAX_MS,
         }
         self._consumer = confluent_kafka.Consumer(conf)
 
@@ -244,6 +250,8 @@ class KafkaConsumer:
         """
         try:
             while True:
+                if self._most_recent_only:
+                    self._fast_forward()
                 msg = self._consumer.poll(timeout)
                 if msg is None:
                     logger.info(
@@ -263,3 +271,19 @@ class KafkaConsumer:
         finally:
             self._consumer.commit()
             self._consumer.close()
+
+    def _fast_forward(self) -> None:
+        """Fast forward the Kafka stream, so the last available message will be returned
+        next."""
+        assignment = self._consumer.assignment()
+        if len(assignment) != 1:
+            raise RuntimeError(f"Expected a single topic assignment, got {assignment}")
+        cur_offset = self._consumer.position(assignment)[0]
+        _, high_watermark = self._consumer.get_watermark_offsets(assignment[0])
+        # Check if we're not already at the end
+        if cur_offset.offset < high_watermark - 1:
+            cur_offset.offset = high_watermark - 1
+            self._consumer.seek(cur_offset)
+            # Wait for the in-flight request to return, seek takes effect afterwards
+            # See: https://www.feldera.com/blog/seeking-in-kafka
+            time.sleep(_FETCH_WAIT_MAX_MS / 1000)
