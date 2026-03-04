@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 DATA_SOURCE = f"""
 ymmsl_version: v0.2
 
+description: Importable yMMSL configuration for imas_streams_source
 programs:
     imas_streams_source:
         executable: {sys.executable}
