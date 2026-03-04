@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import click
 import imas
@@ -62,3 +63,22 @@ def kafka_to_imasentry(
         for result in consumer.stream():
             if result is not None:
                 entry.put_slice(result)
+
+
+@main.command()
+def kafka_to_muscle3():
+    """MUSCLE3 actor consuming streaming IMAS data from a Kafka topic and making it
+    available to a MUSCLE3 workflow.
+    """
+    # Ensure optional dependencies are available
+    try:
+        import libmuscle  # noqa: F401
+
+        import imas_streams.kafka  # noqa: F401
+    except ModuleNotFoundError:
+        click.echo("Error: please install the optional kafka and muscle3 dependencies.")
+        sys.exit(1)
+
+    from imas_streams.muscle3 import data_source
+
+    data_source()

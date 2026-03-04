@@ -20,13 +20,11 @@ dynamic = ["version"]
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-all = ["imas-streams[kafka,dev]"]
+all = ["imas-streams[dev,kafka,muscle3]"]
 kafka = ["confluent-kafka"]
-dev = ["imas-streams[test,linting]"]
-linting = [
+muscle3 = ["muscle3"]
+dev = [
     "ruff",
-]
-test = [
     "pytest",
     "pytest-cov",
     "pytest-xdist",
@@ -43,6 +41,10 @@ include = ["imas_streams*"]
 
 [project.scripts]
 imas-streams = "imas_streams.cli:main"
+
+# N.B. the following is a proposed API and may need to change
+[project.entry-points."ymmsl.path"]
+"imas_streams/data_source.ymmsl" = "imas_streams.muscle3_datasource:DATA_SOURCE"
 
 [tool.setuptools_scm]
 local_scheme = "no-local-version"
