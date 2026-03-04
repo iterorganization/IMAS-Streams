@@ -226,7 +226,7 @@ class KafkaConsumer:
             raise RuntimeError("Timeout reached while waiting for streaming metadata.")
         if msg.error() is not None:
             raise msg.error()
-        headers = dict(msg.headers())
+        headers = dict(msg.headers() or [])
         if _STREAMING_HEADER_KEY not in headers:
             raise RuntimeError(
                 f"Topic '{topic_name}' does not contain IMAS streaming metadata."
