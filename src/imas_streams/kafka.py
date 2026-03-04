@@ -165,7 +165,13 @@ class KafkaConsumer:
             settings: Kafka host and topic to connect to.
             stream_consumer_cls: StreamConsumer type used for processing the received
                 messages.
+
+        Keyword Args:
             timeout: Maximum time (in seconds) to wait for the topic.
+            most_recent_only: Set to True to only receive the most recent message with
+                every iteration of ``stream()``.
+            stream_consumser_kwargs: any additional keyword arguments are forwarded to
+                the constructor of ``stream_consumer_cls``.
         """
         self._settings = settings
         self._most_recent_only = most_recent_only
