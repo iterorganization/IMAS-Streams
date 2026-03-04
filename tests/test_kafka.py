@@ -74,6 +74,30 @@ def test_kafka_producer_consumer(kafka_host, test_magnetics):
     assert i == 4  # We should have received 5 messages
 
 
+def test_kafka_producer_consumer_most_recent_only(kafka_host, test_magnetics):
+    ids_producer = StreamingIDSProducer(test_magnetics)
+    settings = KafkaSettings(host=kafka_host, topic_name="test")
+    kafka_producer = KafkaProducer(settings, ids_producer.metadata)
+
+    for i in range(5):
+        test_magnetics.time[0] = i
+        test_magnetics.flux_loop[0].flux.data[0] = 1 - i / 10
+
+        message = ids_producer.create_message(test_magnetics)
+        kafka_producer.produce(bytes(message))
+
+    kafka_consumer = KafkaConsumer(
+        settings, StreamingIDSConsumer, most_recent_only=True
+    )
+    result = list(kafka_consumer.stream(timeout=0.1))
+    # We should have only the most recent message at i=4
+    assert len(result) == 1
+    ids = result[0]
+    assert ids.time[0] == 4
+    assert ids.flux_loop[0].name == "test"
+    assert ids.flux_loop[0].flux.data[0] == 1 - 4 / 10
+
+
 def test_kafka_producer_topic_exists(kafka_host, test_magnetics):
     ids_producer = StreamingIDSProducer(test_magnetics)
     settings = KafkaSettings(host=kafka_host, topic_name="test")
