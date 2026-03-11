@@ -26,7 +26,11 @@ DEFAULT_KAFKA_CONSUMER_TIMEOUT = 60  # seconds
 _INITIAL_BACKOFF_TIME = 0.02  # seconds
 _MAXIMUM_BACKOFF_TIME = 1.0  # seconds
 _STREAMING_HEADER_KEY = "streaming-imas-metadata"
-_FETCH_WAIT_MAX_MS = 50
+# Kafka server will wait maximal _FETCH_WAIT_MAX_MS before sending new messages to the
+# consumer. Adjusted from the default (500ms) to decrease latency, especially when using
+# "most_recent_only" since a seek() needs to wait at least this amount of time before it
+# is effective (see KafkaConsumer._fast_forward()).
+_FETCH_WAIT_MAX_MS = 50  # milli-seconds
 
 
 class KafkaSettings(BaseModel):
