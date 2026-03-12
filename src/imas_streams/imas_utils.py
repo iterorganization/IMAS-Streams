@@ -34,7 +34,7 @@ def get_dynamic_aos_ancestor(ids_node: IDSPrimitive) -> IDSStructArray:
     return node
 
 
-def resize_dynamic_aos_ancestor(
+def resize_and_return_dynamic_aos_ancestor(
     ids_node: IDSPrimitive, batch_size: int
 ) -> IDSStructArray:
     """Resize the dynamic Array of Structures ancestor to 'batch_size' elements and

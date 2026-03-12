@@ -8,7 +8,10 @@ import numpy as np
 from imas.util import to_xarray
 
 from imas_streams import StreamingIMASMetadata
-from imas_streams.imas_utils import get_path_from_aos, resize_dynamic_aos_ancestor
+from imas_streams.imas_utils import (
+    get_path_from_aos,
+    resize_and_return_dynamic_aos_ancestor,
+)
 
 if TYPE_CHECKING:
     import xarray
@@ -177,7 +180,7 @@ class StreamingXArrayConsumer:
                 ids_node.value = np.zeros(batched_shape)
             else:
                 # Dynamic variable inside a time-dependent AoS, find and resize the AoS:
-                aos = resize_dynamic_aos_ancestor(ids_node, self._batch_size)
+                aos = resize_and_return_dynamic_aos_ancestor(ids_node, self._batch_size)
                 path_from_aos = get_path_from_aos(dyndata.path, aos)
                 for item in aos:
                     item[path_from_aos].value = np.zeros(dyndata.shape)

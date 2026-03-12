@@ -6,7 +6,7 @@ from imas.ids_toplevel import IDSToplevel
 from imas_streams.imas_utils import (
     get_dynamic_aos_ancestor,
     get_path_from_aos,
-    resize_dynamic_aos_ancestor,
+    resize_and_return_dynamic_aos_ancestor,
 )
 from imas_streams.metadata import StreamingIMASMetadata
 
@@ -231,7 +231,7 @@ class BatchedIDSConsumer:
                 assert ids_node.value is dataview
             else:
                 # Dynamic variable inside a time-dependent AoS, find and resize the AoS:
-                aos = resize_dynamic_aos_ancestor(ids_node, batch_size)
+                aos = resize_and_return_dynamic_aos_ancestor(ids_node, batch_size)
                 path_from_aos = get_path_from_aos(dyndata.path, aos)
                 if ids_node.metadata.ndim == 0:
                     # This is a scalar node
