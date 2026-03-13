@@ -4,6 +4,7 @@ import pytest
 from imas.ids_defs import CLOSEST_INTERP
 
 from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer, StreamingIDSProducer
+from imas_streams.netcdf_consumers import NetCDFConsumer
 from imas_streams.xarray_consumers import StreamingXArrayConsumer
 
 
@@ -112,3 +113,30 @@ def test_stream_core_profiles_xarray_batched(testdb):
     # Check that the data is identical
     assert xrds_deserialized is not None
     assert xrds_orig.equals(xrds_deserialized)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 3, 4])
+def test_stream_core_profiles_netcdf(testdb, tmp_path, batch_size):
+    ids_name = "core_profiles"
+    times = testdb.get(ids_name, lazy=True).time.value
+    first_slice = testdb.get_slice(ids_name, times[0], CLOSEST_INTERP)
+    producer = StreamingIDSProducer(first_slice, static_paths=cp_static_paths)
+    fname = tmp_path / "test.nc"
+    consumer = NetCDFConsumer(producer.metadata, filename=fname, batch_size=batch_size)
+
+    for t in times:
+        time_slice = testdb.get_slice(ids_name, t, CLOSEST_INTERP)
+        data = producer.create_message(time_slice)
+
+        result = consumer.process_message(data)
+        assert result is None
+    result = consumer.finalize()
+    assert result is None
+
+    # Check that the file is as expected
+    with imas.DBEntry(str(fname), "r") as entry:
+        ids = entry.get(ids_name)
+
+    # Compare against full IDS
+    ids_orig = testdb.get(ids_name)
+    assert list(imas.util.idsdiffgen(ids, ids_orig)) == []
