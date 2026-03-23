@@ -23,3 +23,5 @@ def test_netcdf_consumer(magnetics_metadata, tmp_path, batch_size):
         ids = entry.get("magnetics")
 
     assert np.array_equal(ids.time, np.arange(20, dtype=float))
+    assert len(ids.flux_loop) == 5
+    assert np.array_equal(ids.flux_loop[0].flux.data, np.arange(1, 21, dtype=float))

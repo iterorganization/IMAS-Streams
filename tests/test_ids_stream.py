@@ -139,4 +139,11 @@ def test_stream_core_profiles_netcdf(testdb, tmp_path, batch_size):
 
     # Compare against full IDS
     ids_orig = testdb.get(ids_name)
-    assert list(imas.util.idsdiffgen(ids, ids_orig)) == []
+    # N.B. imas.util.to_xarray doesn't include metadata for inhomogeneously sized AoS
+    # so we ignore all differences for the size of profiles_1d/ion/state AoS
+    diffs = [
+        diff
+        for diff in imas.util.idsdiffgen(ids, ids_orig)
+        if diff[0] != "profiles_1d/ion/state"
+    ]
+    assert diffs == []
