@@ -38,14 +38,16 @@ def resize_and_return_dynamic_aos_ancestor(
     ids_node: IDSPrimitive, batch_size: int
 ) -> IDSStructArray:
     """Resize the dynamic Array of Structures ancestor to 'batch_size' elements and
-    return the AoS.
+    return that AoS.
     """
     # First find AoS ancestor
     aos = get_dynamic_aos_ancestor(ids_node)
-    # First ensure there's an entry for every batch_size time slices:
+    # Ensure there's an entry for all batch_size time slices:
     if len(aos) != batch_size:
+        # We expect that the input IDS has a single time slice initially:
         assert len(aos) == 1
         aos.resize(batch_size, keep=True)
+        # Copy any static data to all batched time slices:
         for i in range(1, batch_size):
             aos[i] = copy.deepcopy(aos[0])
     return aos
