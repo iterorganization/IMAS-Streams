@@ -46,6 +46,7 @@ def test_xarray_consumer(magnetics_metadata):
 
     data = np.arange(7, dtype="<f8")
     dataset = consumer.process_message(data.tobytes())
+    assert dataset is not None
 
     assert np.array_equal(dataset.time, [0.0])
     assert np.array_equal(
@@ -82,6 +83,7 @@ def test_xarray_consumer_shuffled_aos(magnetics_metadata):
 
     data = np.arange(8, dtype="<f8")
     dataset = consumer.process_message(data.tobytes())
+    assert dataset is not None
 
     assert np.array_equal(dataset.time, [0.0])
     assert np.array_equal(
@@ -93,3 +95,41 @@ def test_xarray_consumer_shuffled_aos(magnetics_metadata):
         [[np.nan], [1.0], [np.nan], [5.0], [np.nan]],
         equal_nan=True,
     )
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 5, 7, 10, 13, 20])
+def test_xarray_batched(magnetics_metadata, batch_size):
+    reader = StreamingXArrayConsumer(magnetics_metadata, batch_size=batch_size)
+
+    def check_data(dataset, expected_time):
+        assert np.array_equal(dataset.time, expected_time)
+        assert np.array_equal(
+            dataset["flux_loop.flux.data"],
+            [[1.0], [2.0], [3.0], [4.0], [5.0]] + expected_time[None, :],
+        )
+        assert np.array_equal(
+            dataset["flux_loop.voltage.data"],
+            [[6.0]] + [[np.nan]] * 4 + expected_time[None, :],
+            equal_nan=True,
+        )
+
+    # Pretend sending 20 messages
+    for i in range(20):
+        test_data = np.arange(len(magnetics_metadata.dynamic_data), dtype="<f8") + i
+        dataset = reader.process_message(test_data.tobytes())
+        # Only expect a result after batch_size items are processed
+        if dataset is None:
+            assert (i + 1) % batch_size != 0
+            continue
+        expected_time = np.arange(batch_size, dtype=float) + (i + 1 - batch_size)
+        check_data(dataset, expected_time)
+
+    # Check that any remainders are handled
+    msg_remaining = 20 % batch_size
+    dataset = reader.finalize()
+    if dataset is None:
+        assert msg_remaining == 0
+    else:
+        assert len(dataset.time) == msg_remaining != 0
+        expected_time = np.arange(msg_remaining, dtype=float) + 20 - msg_remaining
+        check_data(dataset, expected_time)

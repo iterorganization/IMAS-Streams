@@ -3,7 +3,11 @@ import copy
 import numpy as np
 from imas.ids_toplevel import IDSToplevel
 
-from imas_streams.imas_utils import get_dynamic_aos_ancestor, get_path_from_aos
+from imas_streams.imas_utils import (
+    get_dynamic_aos_ancestor,
+    get_path_from_aos,
+    resize_and_return_dynamic_aos_ancestor,
+)
 from imas_streams.metadata import StreamingIMASMetadata
 
 
@@ -226,14 +230,8 @@ class BatchedIDSConsumer:
                 # Verify that IMAS-Python keeps the view of our buffer
                 assert ids_node.value is dataview
             else:
-                # This is a dynamic variable inside a time-dependent AoS: find that aos
-                aos = get_dynamic_aos_ancestor(ids_node)
-                # First ensure there's an entry for every batch_size time slices:
-                if len(aos) != batch_size:
-                    assert len(aos) == 1
-                    aos.resize(batch_size, keep=True)
-                    for i in range(1, batch_size):
-                        aos[i] = copy.deepcopy(aos[0])
+                # Dynamic variable inside a time-dependent AoS, find and resize the AoS:
+                aos = resize_and_return_dynamic_aos_ancestor(ids_node, batch_size)
                 path_from_aos = get_path_from_aos(dyndata.path, aos)
                 if ids_node.metadata.ndim == 0:
                     # This is a scalar node
@@ -242,6 +240,7 @@ class BatchedIDSConsumer:
                     # Loop over all time slices and create views:
                     for i in range(batch_size):
                         dataview = self._array_view[i, idx : idx + n]
+                        dataview = dataview.reshape(dyndata.shape)
                         aos[i][path_from_aos].value = dataview
                         # Verify that IMAS-Python keeps the view of our buffer
                         assert aos[i][path_from_aos].value is dataview

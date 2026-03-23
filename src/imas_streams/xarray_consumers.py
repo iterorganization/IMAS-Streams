@@ -1,3 +1,4 @@
+import copy
 import itertools
 import re
 from collections.abc import Iterable
@@ -7,6 +8,10 @@ import numpy as np
 from imas.util import to_xarray
 
 from imas_streams import StreamingIMASMetadata
+from imas_streams.imas_utils import (
+    get_path_from_aos,
+    resize_and_return_dynamic_aos_ancestor,
+)
 
 if TYPE_CHECKING:
     import xarray
@@ -71,21 +76,19 @@ class StreamingXArrayConsumer:
                 ...
     """
 
-    def __init__(self, metadata: StreamingIMASMetadata) -> None:
+    def __init__(self, metadata: StreamingIMASMetadata, *, batch_size: int = 1) -> None:
         """Consumer of streaming IMAS data which outputs xarray.Datasets.
 
         Args:
             metadata: Metadata of the IMAS data stream.
         """
+        if batch_size < 1:
+            raise ValueError(f"Invalid batch size: {batch_size}")
+
         self._metadata = metadata
-        ids = metadata.static_data
-        # Add entries for dynamic data in the IDS, so the IMAS-Python to_xarray will
-        # create the corresponding xarray.DataArrays for us
-        for dyndata in metadata.dynamic_data:
-            ids[dyndata.path].value = np.zeros(dyndata.shape)
-        self._dataset = to_xarray(ids)
-        # pandas is optional (through IMAS-Python), so import locally
-        from pandas import Index
+        self._batch_size = batch_size
+        # Setup dataset with batched time dimensions
+        self._dataset = self._prepare_dataset()
 
         # Setup array view buffer
         buffersize = 0
@@ -99,6 +102,9 @@ class StreamingXArrayConsumer:
         dtype = "<f8"  # little-endian IEEE-754 64-bits floating point number
         self._tensor_buffer = np.ndarray(buffersize, dtype=dtype)
         readonly_view = memoryview(self._tensor_buffer).toreadonly()
+
+        # pandas is optional (through IMAS-Python), so import locally
+        from pandas import Index
 
         # Setup array views
         tensor_idx = 0
@@ -125,24 +131,63 @@ class StreamingXArrayConsumer:
 
         # Set up the index array for writing received messages into the tensor buffer:
         self._index_array = np.zeros(metadata.nbytes // 8, dtype=int)
+        self._time_offsets = np.zeros(metadata.nbytes // 8, dtype=int)
         idx = 0
         for dyndata in metadata.dynamic_data:
             path, indices = path_to_xarray_name_and_indices(dyndata.path)
             # First check if this works before attempting to speed up
             array = self._dataset[path].data
+            time_dim = self._dataset[path].dims.index("time")
+            time_offset = array.strides[time_dim]
             base_address = np_address_of(array) + offset_in_array(array, indices)
             subarray = array[indices]
             for index in itertools.product(*[range(i) for i in dyndata.shape]):
                 self._index_array[idx] = base_address + offset_in_array(subarray, index)
+                self._time_offsets[idx] = time_offset
                 idx += 1
         self._index_array -= np_address_of(self._tensor_buffer)
-        self._index_array //= 8  # go from bytes to indices in the numpy array
+        # Convert memory offsets in bytes to array offsets:
+        self._index_array //= 8
+        self._time_offsets //= 8
 
         # Message buffer and non-tensorized array view
         self._msg_buffer = memoryview(bytearray(metadata.nbytes))
         self._array_view = np.frombuffer(self._msg_buffer, dtype=dtype)
+        # Current index in the batch
+        self._cur_idx = 0
+        self._finished = False
 
-    def process_message(self, data: bytes | bytearray) -> "xarray.Dataset":
+    def _prepare_dataset(self) -> "xarray.Dataset":
+        """Prepare the IDS by setting all time-dependent quantities to the correct size.
+
+        This takes the batch_size into account and resizes time-dependent quantities as
+        appropriate.
+        """
+        ids = copy.deepcopy(self._metadata.static_data)
+
+        # Add entries for dynamic data in the IDS, so the IMAS-Python to_xarray will
+        # create the corresponding xarray.DataArrays for us
+        for dyndata in self._metadata.dynamic_data:
+            assert dyndata.data_type == "f64"
+            ids_node = ids[dyndata.path]
+            assert ids_node.metadata.type.is_dynamic
+            if dyndata.path == "time" or (
+                ids_node.metadata.ndim
+                and ids_node.metadata.coordinates[0].is_time_coordinate
+            ):
+                # Node has explicit time axis
+                batched_shape = (self._batch_size,) + dyndata.shape[1:]
+                ids_node.value = np.zeros(batched_shape)
+            else:
+                # Dynamic variable inside a time-dependent AoS, find and resize the AoS:
+                aos = resize_and_return_dynamic_aos_ancestor(ids_node, self._batch_size)
+                path_from_aos = get_path_from_aos(dyndata.path, aos)
+                for item in aos:
+                    item[path_from_aos].value = np.zeros(dyndata.shape)
+
+        return to_xarray(ids)
+
+    def process_message(self, data: bytes | bytearray) -> "xarray.Dataset | None":
         """Process a dynamic data message and return the resulting xarray Dataset.
 
         Note that for efficiency we return the same dataset with each call. You should
@@ -152,6 +197,8 @@ class StreamingXArrayConsumer:
         Args:
             data: Binary data corresponding to one time slice of dynamic data.
         """
+        if self._finished:
+            raise RuntimeError("")
         if len(data) != len(self._msg_buffer):
             raise ValueError(
                 f"Unexpected size of data: {len(data)}. "
@@ -159,9 +206,26 @@ class StreamingXArrayConsumer:
             )
         # Copy data to internal buffer, then write into the tensor view:
         self._msg_buffer[:] = data
-        self._tensor_buffer[self._index_array] = self._array_view
-        return self._dataset
+        buffer_indices = self._index_array
+        if self._cur_idx > 0:
+            buffer_indices = buffer_indices + self._cur_idx * self._time_offsets
+        self._tensor_buffer[buffer_indices] = self._array_view
 
-    def finalize(self) -> None:
+        # Bookkeeping
+        self._cur_idx += 1
+        if self._cur_idx == self._batch_size:
+            # Completed a batch
+            self._cur_idx = 0
+            return self._dataset
+        # Batch is not finished yet
+        return None
+
+    def finalize(self) -> "xarray.Dataset | None":
         """Indicate that the final message is received and return any remaining data."""
-        return None  # No data remaining
+        self._finished = True
+        n_time = self._cur_idx
+        if n_time == 0:
+            return None  # No data remaining, easy!
+
+        # Let xarray handle resizing of the time dimension
+        return self._dataset.isel(time=slice(None, n_time))

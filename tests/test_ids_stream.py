@@ -7,9 +7,17 @@ from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer, StreamingIDSP
 from imas_streams.xarray_consumers import StreamingXArrayConsumer
 
 
+def get_training_db_entry():
+    try:
+        # convert parameter added in IMAS-Python 2.3
+        return imas.training.get_training_db_entry(convert=True)
+    except TypeError:
+        return imas.training.get_training_db_entry()
+
+
 @pytest.fixture(scope="module")
 def testdb():
-    with imas.training.get_training_db_entry() as entry:
+    with get_training_db_entry() as entry:
         yield entry
 
 
@@ -81,3 +89,26 @@ def test_stream_core_profiles_xarray(testdb):
         xrds_deserialized = consumer.process_message(data)
         # Check that both datasets are identical
         assert xrds_orig.equals(xrds_deserialized)
+
+
+def test_stream_core_profiles_xarray_batched(testdb):
+    ids_name = "core_profiles"
+    times = testdb.get(ids_name, lazy=True).time.value
+    first_slice = testdb.get_slice(ids_name, times[0], CLOSEST_INTERP)
+    producer = StreamingIDSProducer(first_slice, static_paths=cp_static_paths)
+    consumer = StreamingXArrayConsumer(producer.metadata, batch_size=len(times))
+
+    for i, t in enumerate(times):
+        time_slice = testdb.get_slice(ids_name, t, CLOSEST_INTERP)
+        data = producer.create_message(time_slice)
+
+        xrds_deserialized = consumer.process_message(data)
+        if i != len(times) - 1:
+            assert xrds_deserialized is None
+
+    # Compare against full IDS
+    ids = testdb.get(ids_name)
+    xrds_orig = imas.util.to_xarray(ids)
+    # Check that the data is identical
+    assert xrds_deserialized is not None
+    assert xrds_orig.equals(xrds_deserialized)
