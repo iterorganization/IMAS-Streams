@@ -1,4 +1,3 @@
-import itertools
 import logging
 from pathlib import Path
 
@@ -60,13 +59,19 @@ class NetCDFConsumer:
     def _store_data(self, ds: xarray.Dataset) -> None:
         """Store data to netCDF file"""
         if self._netcdf_file is None:
-            # Ensure integers are stored as int32:
+            # Check which variables are time-dependent
+            for varname in ds.variables:
+                if "time" in ds[varname].dims:
+                    self._time_variables.append(varname)
+
+            # Compress dynamic data
             encoding = {
-                name: {"dtype": "int32"}
-                for name in itertools.chain(ds.coords, ds.data_vars)
-                if ds[name].dtype.kind == "i"
+                name: {"compression": "zlib", "complevel": 1}
+                for name in self._time_variables
+                if ds[name].dtype.kind in "if"
             }
-            # First time saving, use xarray API to create the netCDF file
+
+            # Use xarray API to create the netCDF file
             ds.to_netcdf(
                 self._filename,
                 "w",
@@ -84,11 +89,6 @@ class NetCDFConsumer:
             self._netcdf_file.data_dictionary_version = (
                 self._metadata.data_dictionary_version
             )
-
-            # Check which variables are time-dependent
-            for varname in itertools.chain(ds.coords, ds.data_vars):
-                if "time" in ds[varname].dims:
-                    self._time_variables.append(varname)
 
         else:
             # Add time slices to netCDF file
