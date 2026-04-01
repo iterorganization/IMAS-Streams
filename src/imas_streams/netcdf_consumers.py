@@ -35,7 +35,7 @@ class NetCDFConsumer:
 
     def __init__(
         self, metadata: StreamingIMASMetadata, *, filename: Path, batch_size: int = 1024
-    ):
+    ) -> None:
         self._metadata = metadata
         self._groupname = f"{metadata.ids_name}/0"
         self._filename = filename
@@ -66,7 +66,11 @@ class NetCDFConsumer:
 
             # Compress dynamic data
             encoding = {
-                name: {"compression": "zlib", "complevel": 1}
+                name: {
+                    "compression": "zlib",
+                    "complevel": 1,
+                    "chunksizes": self._chunksize(ds[name]),
+                }
                 for name in self._time_variables
                 if ds[name].dtype.kind in "if"
             }
@@ -101,6 +105,17 @@ class NetCDFConsumer:
                     timeslice if dim == "time" else allslice for dim in xrvar.dims
                 )
                 group[varname][index] = xrvar.data
+
+    def _chunksize(self, array: xarray.DataArray) -> tuple[int, ...]:
+        """Heuristic to determine chunksizes for storing the provided data array"""
+        if array.nbytes > 4_194_304:  # 4 MB
+            logger.warning(
+                "Huge chunk detected due to batchsize for %s: %s (=%d bytes)",
+                array.name,
+                array.shape,
+                array.nbytes,
+            )
+        return array.shape
 
     def process_message(self, data: bytes | bytearray) -> None:
         """Process a dynamic data message and store it (when a batch is full)."""
