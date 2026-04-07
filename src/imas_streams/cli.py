@@ -85,6 +85,6 @@ def kafka_to_muscle3():
         click.echo("Error: please install the optional kafka and muscle3 dependencies.")
         sys.exit(1)
 
-    from imas_streams.muscle3 import data_source
+    from imas_streams.muscle3_datasource import data_source
 
     data_source()
