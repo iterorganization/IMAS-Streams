@@ -57,10 +57,14 @@ programs:
 
 def data_source():
     # Local imports for all optional dependencies
+    import libmuscle
     from libmuscle import Instance, Message
     from ymmsl import Operator
 
     from imas_streams.kafka import KafkaConsumer, KafkaSettings
+
+    if tuple(map(int, libmuscle.__version__.split(".")[:2])) < (0, 9):
+        raise RuntimeError("This actor requires libmuscle version 0.9.0 or later")
 
     logger.info("Creating libmuscle instance")
     instance = Instance({Operator.O_I: ["ids_out"], Operator.S: ["trigger"]})

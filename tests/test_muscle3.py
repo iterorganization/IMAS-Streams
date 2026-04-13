@@ -1,5 +1,5 @@
 import ymmsl
-from ymmsl.v0_2 import Reference, resolve
+from ymmsl.v0_2 import Configuration, Reference, resolve
 
 ymmsl_config = """
 ymmsl_version: v0.2
@@ -27,6 +27,6 @@ resources:
 
 
 def test_load_ymmsl_config():
-    config = ymmsl.load(ymmsl_config)
+    config = ymmsl.load_as(Configuration, ymmsl_config)
     resolve(Reference([]), config)
     config.check_consistent()
