@@ -42,8 +42,7 @@ include = ["imas_streams*"]
 [project.scripts]
 imas-streams = "imas_streams.cli:main"
 
-# N.B. the following is a proposed API and may need to change
-[project.entry-points."ymmsl.path"]
+[project.entry-points."ymmsl.module"]
 "imas_streams.data_source" = "imas_streams.muscle3_datasource:DATA_SOURCE"
 
 [tool.setuptools_scm]
