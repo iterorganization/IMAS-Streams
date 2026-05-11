@@ -4,7 +4,7 @@ import pytest
 import ymmsl
 from ymmsl.v0_2 import Configuration, Reference, resolve
 
-from imas_streams.muscle3_datasource import DATA_SOURCE
+from imas_streams.muscle3_config import DATA_SOURCE
 
 ymmsl_config = """
 ymmsl_version: v0.2

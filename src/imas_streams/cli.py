@@ -88,3 +88,23 @@ def kafka_to_muscle3():
     from imas_streams.muscle3_datasource import data_source
 
     data_source()
+
+
+@main.command
+def dynamic_kafka_to_muscle3():
+    """MUSCLE3 actor consuming multiple IMAS data streams from Kafka topics, making the
+    data available to a MUSCLE3 workflow, with the ability to publish the workflow data
+    back to Kafka.
+    """
+    # Ensure optional dependencies are available
+    try:
+        import libmuscle  # noqa: F401
+
+        import imas_streams.kafka  # noqa: F401
+    except ModuleNotFoundError:
+        click.echo("Error: please install the optional kafka and muscle3 dependencies.")
+        sys.exit(1)
+
+    from imas_streams.muscle3_datasource import dynamic_data_source
+
+    dynamic_data_source()

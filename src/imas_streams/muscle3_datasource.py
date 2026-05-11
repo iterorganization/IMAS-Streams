@@ -1,68 +1,17 @@
 import logging
-import sys
+
+import libmuscle
+from libmuscle import Instance, Message
+from ymmsl import Operator
 
 from imas_streams import BatchedIDSConsumer
+from imas_streams.kafka import KafkaConsumer, KafkaSettings
 
 logger = logging.getLogger(__name__)
 
 
-DATA_SOURCE = f"""
-ymmsl_version: v0.2
-
-description: Importable yMMSL configuration for imas_streams_source
-programs:
-    imas_streams_source:
-        executable: {sys.executable}
-        args: -m imas_streams kafka-to-muscle3
-
-        ports:
-            o_i: ids_out
-            s: trigger
-
-        description: |
-            # IMAS-Streams data source
-
-            Data source reading Streaming IMAS data from a Kafka topic and making it
-            available in a MUSCLE3 simulation.
-
-            The `ids_out` port sends one message for every `batch_size` time slices
-            streamed over the configured kafka topic. The type of IDS depends on the
-            configured kafka topic: please take care that this matches the IDS that is
-            expected for components receiving the message.
-
-            You may use the `trigger` port to indicate that the previous message is
-            processed and a new message may be sent. If this port is not connected then
-            this component will send messages on the `ids_out` port as soon as they are
-            available.
-
-        supported_settings:
-            kafka_host: >
-                str Bootstrap server address for Kafka (e.g. "localhost:9092" for a
-                locally running kafka).
-            kafka_topic: >
-                str Name of the kafka topic with streaming IMAS data to subscribe to.
-            batch_size: >
-                int Number of time slices to batch in a single MUSCLE3 message.
-                Default is one time slice per message.
-            most_recent_only: >
-                bool If not set, or set to false, all data in the IMAS Data Stream is
-                provided to the MUSCLE3 simulation.
-                This can be set to true to provide the last available time point with
-                each iteration. This mode is useful while data is being produced (e.g.
-                during an experimental pulse) and it is more important to have
-                up-to-date data than to process all time points.
-"""
-"""yMMSL description of the imas_streams_source actor"""
-
-
 def data_source():
-    # Local imports for all optional dependencies
-    import libmuscle
-    from libmuscle import Instance, Message
-    from ymmsl import Operator
-
-    from imas_streams.kafka import KafkaConsumer, KafkaSettings
-
+    """MUSCLE3 data source streaming data from a single IMAS Stream on a Kafka topic."""
     if tuple(map(int, libmuscle.__version__.split(".")[:2])) < (0, 9):
         raise RuntimeError("This actor requires libmuscle version 0.9.0 or later")
 
@@ -113,3 +62,88 @@ def data_source():
         logger.info("IMAS data stream ended")
 
     logger.info("Reuse loop finished")
+
+
+def dynamic_data_source():
+    """MUSCLE3 data source supporting streaming from multiple Kafka topics and
+    publishing data back to Kafka.
+    """
+    # FIXME: Check which version of M3 supports dynamic O_I and S ports
+    # See PR: https://github.com/multiscale/muscle3/pull/350
+    if tuple(map(int, libmuscle.__version__.split(".")[:2])) < (0, 10):
+        raise RuntimeError("This actor requires libmuscle version 0.10.0 or later")
+
+    logger.info("Creating libmuscle instance")
+    instance = Instance()  # Don't specify ports to allow dynamic input/output ports
+
+    # Check the dynamic port configuration
+    ports = instance.list_ports()
+    for operator in [Operator.F_INIT, Operator.O_F]:
+        if ports.get(operator):
+            raise RuntimeError(
+                f"imas_streams does not support {operator.name} ports, but the "
+                f"following ports were defined: {', '.join(ports[Operator.F_INIT])}"
+            )
+    output_ports = [port for port in ports[Operator.O_I] if instance.is_connected(port)]
+    input_ports = [port for port in ports[Operator.S] if instance.is_connected(port)]
+    if not output_ports or not input_ports:
+        raise RuntimeError("imas_streams needs at least one O_I port and one S port.")
+
+    while instance.reuse_instance():
+        logger.info("Reading settings")
+        kafka_host = instance.get_setting("kafka_host", "str")
+        kafka_topics = instance.get_setting("kafka_topics", "str")
+
+        topic_per_port = _parse_topics(kafka_topics, output_ports, input_ports)
+        output_port_topics = {
+            port: topic
+            for port, topic in topic_per_port.items()
+            if port in output_ports
+        }
+
+        # TODO:
+        # 1 Create kafka clients for each topic we want to receive data for
+        # 2 Create kafka producer for each topic we need to send data on
+        # 3 Synchronize messages from different streams
+        # 4 Read message in streams, instance.send() on the respective ports
+        # 5 instance.receive() on input ports, create streaming IMAS data frame and send
+        #   to Kafka
+        # 6 Repeat 4-6 until stream has ended
+
+
+def _parse_topics(
+    kafka_topics: str, output_ports: list[str], input_ports: list[str]
+) -> dict[str, str]:
+    """Parse kafka topics and return a dict {port_name: topic_name}."""
+    topic_per_port: dict[str, str] = {}
+    for line in kafka_topics.splitlines():
+        if not line.strip():
+            continue
+        port, _, topic = map(str.strip, line.partition(":"))
+        if not topic or not port:
+            raise RuntimeError(
+                f"Invalid line encountered in 'kafka_topics' setting: '{line}'"
+            )
+
+        if port in output_ports or port in input_ports:
+            topic_per_port[port] = topic
+        else:
+            logger.info(
+                "Ignoring kafka topic '%s' for disconnected port '%s'", topic, port
+            )
+
+    if len(topic_per_port) != len(output_ports) + len(input_ports):
+        missing_output = [port for port in output_ports if port not in topic_per_port]
+        missing_input = [port for port in input_ports if port not in topic_per_port]
+        missing_msgs = []
+        if missing_output:
+            missing_msgs.append(f"output ports: {', '.join(missing_output)}")
+        if missing_input:
+            missing_msgs.append(f"input ports: {', '.join(missing_input)}")
+        missing_msg = " and ".join(missing_msgs)
+        raise RuntimeError(
+            f"Kafka topic is missing for {missing_msg}. Please add a line to the "
+            "'kafka_topics' setting for each port."
+        )
+
+    return topic_per_port
