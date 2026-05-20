@@ -44,7 +44,7 @@ class KafkaSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _create_kafka_topic(settings: KafkaSettings):
+def create_kafka_topic(settings: KafkaSettings):
     """Create a new kafka topic.
 
     This will raise an exception when the topic already exists, or if the topic could
@@ -95,7 +95,7 @@ class KafkaProducer:
         self._message_key = f"IMAS-Kafka-{base64.b64encode(random_id).decode()}"
 
         # Create the topic and send the metadata as first message
-        _create_kafka_topic(settings)
+        create_kafka_topic(settings)
         self._producer.produce(
             topic=self._settings.topic_name,
             value=self._metadata.model_dump_json().encode(),

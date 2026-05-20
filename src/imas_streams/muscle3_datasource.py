@@ -1,11 +1,13 @@
 import logging
+from collections.abc import Iterator
 
 import libmuscle
+from confluent_kafka import Producer
 from libmuscle import Instance, Message
 from ymmsl import Operator
 
-from imas_streams import BatchedIDSConsumer
-from imas_streams.kafka import KafkaConsumer, KafkaSettings
+from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer
+from imas_streams.kafka import KafkaConsumer, KafkaSettings, create_kafka_topic
 
 logger = logging.getLogger(__name__)
 
@@ -68,82 +70,148 @@ def dynamic_data_source():
     """MUSCLE3 data source supporting streaming from multiple Kafka topics and
     publishing data back to Kafka.
     """
-    # FIXME: Check which version of M3 supports dynamic O_I and S ports
-    # See PR: https://github.com/multiscale/muscle3/pull/350
+    # Check which version of M3 supports dynamic O_I and S ports
     if tuple(map(int, libmuscle.__version__.split(".")[:2])) < (0, 10):
         raise RuntimeError("This actor requires libmuscle version 0.10.0 or later")
+    DynamicDataSource().run()
 
-    logger.info("Creating libmuscle instance")
-    instance = Instance()  # Don't specify ports to allow dynamic input/output ports
 
-    # Check the dynamic port configuration
-    ports = instance.list_ports()
-    for operator in [Operator.F_INIT, Operator.O_F]:
-        if ports.get(operator):
+class DynamicDataSource:
+    def __init__(self) -> None:
+        logger.info("Creating libmuscle instance")
+        # Don't specify ports to allow dynamic input/output ports
+        self.instance = Instance()
+
+        # Check the dynamic port configuration
+        ports = self.instance.list_ports()
+        for operator in [Operator.F_INIT, Operator.O_F]:
+            if ports.get(operator):
+                raise RuntimeError(
+                    f"imas_streams does not support {operator.name} ports, but the "
+                    f"following ports were defined: {', '.join(ports[operator])}"
+                )
+        self.output_ports = [
+            port for port in ports[Operator.O_I] if self.instance.is_connected(port)
+        ]
+        self.input_ports = [
+            port for port in ports[Operator.S] if self.instance.is_connected(port)
+        ]
+        if not self.output_ports or not self.input_ports:
             raise RuntimeError(
-                f"imas_streams does not support {operator.name} ports, but the "
-                f"following ports were defined: {', '.join(ports[Operator.F_INIT])}"
+                "imas_streams needs at least one O_I port and one S port."
             )
-    output_ports = [port for port in ports[Operator.O_I] if instance.is_connected(port)]
-    input_ports = [port for port in ports[Operator.S] if instance.is_connected(port)]
-    if not output_ports or not input_ports:
-        raise RuntimeError("imas_streams needs at least one O_I port and one S port.")
 
-    while instance.reuse_instance():
-        logger.info("Reading settings")
-        kafka_host = instance.get_setting("kafka_host", "str")
-        kafka_topics = instance.get_setting("kafka_topics", "str")
+        self.consumers: dict[str, KafkaConsumer] = {}
+        """Kafka consumer per output port."""
+        self.producer: Producer
+        """Kafka producer."""
 
-        topic_per_port = _parse_topics(kafka_topics, output_ports, input_ports)
-        output_port_topics = {
-            port: topic
-            for port, topic in topic_per_port.items()
-            if port in output_ports
+    def run(self) -> None:
+        """Run MUSCLE3 reuse loop."""
+        while self.instance.reuse_instance():
+            logger.info("Reading settings")
+            kafka_host = self.instance.get_setting("kafka_host", "str")
+            kafka_topics = self.instance.get_setting("kafka_topics", "str")
+
+            self.producer = Producer({"bootstrap.servers": kafka_host})
+            topic_per_port = self._parse_topics(kafka_topics)
+            for port, topic in topic_per_port.items():
+                if port in self.output_ports:
+                    self.consumers[port] = KafkaConsumer(
+                        KafkaSettings(host=kafka_host, topic_name=topic),
+                        StreamingIDSConsumer,
+                        return_copy=False,
+                    )
+                else:
+                    create_kafka_topic(KafkaSettings(host=kafka_host, topic_name=topic))
+
+            for msgs in self.generate_serialized_idss():
+                for port, (t, data) in msgs.items():
+                    self.instance.send(port, Message(t, data=data))
+
+                for port in self.input_ports:
+                    msg = self.instance.receive(port)
+                    self.producer.produce(
+                        topic=topic_per_port[port],
+                        value=msg.data,
+                    )
+                    self.producer.poll(0)
+
+            # Cleanup
+            self.consumers = {}
+            self.producer.flush()
+
+    def _parse_topics(self, kafka_topics: str) -> dict[str, str]:
+        """Parse kafka topics and return a dict {port_name: topic_name}."""
+        topic_per_port: dict[str, str] = {}
+        for line in kafka_topics.splitlines():
+            if not line.strip():
+                continue
+            port, _, topic = map(str.strip, line.partition(":"))
+            if not topic or not port:
+                raise RuntimeError(
+                    f"Invalid line encountered in 'kafka_topics' setting: '{line}'"
+                )
+
+            if port in self.output_ports or port in self.input_ports:
+                topic_per_port[port] = topic
+            else:
+                logger.info(
+                    "Ignoring kafka topic '%s' for disconnected port '%s'", topic, port
+                )
+
+        if len(topic_per_port) != len(self.output_ports) + len(self.input_ports):
+            missing_output = [p for p in self.output_ports if p not in topic_per_port]
+            missing_input = [p for p in self.input_ports if p not in topic_per_port]
+            missing_msgs = []
+            if missing_output:
+                missing_msgs.append(f"output ports: {', '.join(missing_output)}")
+            if missing_input:
+                missing_msgs.append(f"input ports: {', '.join(missing_input)}")
+            missing_msg = " and ".join(missing_msgs)
+            raise RuntimeError(
+                f"Kafka topic is missing for {missing_msg}. Please add a line to the "
+                "'kafka_topics' setting for each port."
+            )
+
+        return topic_per_port
+
+    def generate_serialized_idss(self) -> Iterator[dict[str, tuple[float, bytes]]]:
+        """Generate synchronized, serialized IDSs for the subscribed streams."""
+        # Receive once on each stream:
+        streams = {port: consumer.stream() for port, consumer in self.consumers.items()}
+        idss = {port: next(stream) for port, stream in streams.items()}
+
+        latest_starttime = max(ids.time[0] for ids in idss.values())
+        main_ids = next(iter(idss.values()))
+        main_stream = next(iter(streams.values()))
+
+        # Skip ahead the main stream
+        if main_ids.time[0] < latest_starttime:
+            logger.info("Skipping messages until start time of latest stream")
+            while main_ids.time[0] < latest_starttime:
+                next(main_stream)
+
+        # Generate time-synchronized serialized IDSs
+        curdata: dict[str, tuple[float, bytes]] = {
+            port: (ids.time[0], ids.serialize()) for port, ids in idss.items()
         }
+        while True:
+            # Get the last message <= main_ids.time[0] for each stream
+            for port, ids in idss.items():
+                if ids is main_ids:
+                    continue
+                while ids.time[0] <= main_ids.time[0]:
+                    # Note: we may serialize too much here. For example, when the main
+                    # stream produces data at 10 Hz, and a secondary stream at 20 Hz, we
+                    # need to throw away every other serialized IDS.
+                    # N.B. if this becomes a bottleneck we could optimize the IDS
+                    # serialization and directly copy the bytes from the Streaming IDS
+                    # data frame into the serialized IDS (assuming we use the
+                    # flexbuffers serialization protocol).
+                    curdata[port] = (ids.time[0], ids.serialize())
+                    next(streams[port])
+            yield curdata
 
-        # TODO:
-        # 1 Create kafka clients for each topic we want to receive data for
-        # 2 Create kafka producer for each topic we need to send data on
-        # 3 Synchronize messages from different streams
-        # 4 Read message in streams, instance.send() on the respective ports
-        # 5 instance.receive() on input ports, create streaming IMAS data frame and send
-        #   to Kafka
-        # 6 Repeat 4-6 until stream has ended
-
-
-def _parse_topics(
-    kafka_topics: str, output_ports: list[str], input_ports: list[str]
-) -> dict[str, str]:
-    """Parse kafka topics and return a dict {port_name: topic_name}."""
-    topic_per_port: dict[str, str] = {}
-    for line in kafka_topics.splitlines():
-        if not line.strip():
-            continue
-        port, _, topic = map(str.strip, line.partition(":"))
-        if not topic or not port:
-            raise RuntimeError(
-                f"Invalid line encountered in 'kafka_topics' setting: '{line}'"
-            )
-
-        if port in output_ports or port in input_ports:
-            topic_per_port[port] = topic
-        else:
-            logger.info(
-                "Ignoring kafka topic '%s' for disconnected port '%s'", topic, port
-            )
-
-    if len(topic_per_port) != len(output_ports) + len(input_ports):
-        missing_output = [port for port in output_ports if port not in topic_per_port]
-        missing_input = [port for port in input_ports if port not in topic_per_port]
-        missing_msgs = []
-        if missing_output:
-            missing_msgs.append(f"output ports: {', '.join(missing_output)}")
-        if missing_input:
-            missing_msgs.append(f"input ports: {', '.join(missing_input)}")
-        missing_msg = " and ".join(missing_msgs)
-        raise RuntimeError(
-            f"Kafka topic is missing for {missing_msg}. Please add a line to the "
-            "'kafka_topics' setting for each port."
-        )
-
-    return topic_per_port
+            # Fetch the next message of the main stream
+            next(main_stream)
