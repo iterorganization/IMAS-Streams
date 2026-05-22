@@ -71,7 +71,7 @@ def dynamic_data_source():
     publishing data back to Kafka.
     """
     # Check which version of M3 supports dynamic O_I and S ports
-    if tuple(map(int, libmuscle.__version__.split(".")[:2])) < (0, 10):
+    if tuple(map(int, libmuscle.__version__.split(".")[:3])) < (0, 9, 2):
         raise RuntimeError("This actor requires libmuscle version 0.10.0 or later")
     DynamicDataSource().run()
 
@@ -91,10 +91,14 @@ class DynamicDataSource:
                     f"following ports were defined: {', '.join(ports[operator])}"
                 )
         self.output_ports = [
-            port for port in ports[Operator.O_I] if self.instance.is_connected(port)
+            port
+            for port in ports.get(Operator.O_I, [])
+            if self.instance.is_connected(port)
         ]
         self.input_ports = [
-            port for port in ports[Operator.S] if self.instance.is_connected(port)
+            port
+            for port in ports.get(Operator.S, [])
+            if self.instance.is_connected(port)
         ]
         if not self.output_ports or not self.input_ports:
             raise RuntimeError(
@@ -131,6 +135,10 @@ class DynamicDataSource:
 
                 for port in self.input_ports:
                     msg = self.instance.receive(port)
+                    # FIXME: This publishes serialized IDSs instead of streaming IMAS
+                    # data. Our test case (EFIT++) doesn't produce data that adheres to
+                    # the the IMAS-Streams assumptions (see README.md) so we cannot do
+                    # better at the moment, unfortunately...
                     self.producer.produce(
                         topic=topic_per_port[port],
                         value=msg.data,
@@ -160,6 +168,7 @@ class DynamicDataSource:
                     "Ignoring kafka topic '%s' for disconnected port '%s'", topic, port
                 )
 
+        # Exception handling: each port needs to have a topic configured:
         if len(topic_per_port) != len(self.output_ports) + len(self.input_ports):
             missing_output = [p for p in self.output_ports if p not in topic_per_port]
             missing_input = [p for p in self.input_ports if p not in topic_per_port]
@@ -183,8 +192,9 @@ class DynamicDataSource:
         idss = {port: next(stream) for port, stream in streams.items()}
 
         latest_starttime = max(ids.time[0] for ids in idss.values())
-        main_ids = next(iter(idss.values()))
-        main_stream = next(iter(streams.values()))
+        main_port = next(iter(streams))
+        main_ids = idss[main_port]
+        main_stream = streams[main_port]
 
         # Skip ahead the main stream
         if main_ids.time[0] < latest_starttime:
@@ -204,14 +214,24 @@ class DynamicDataSource:
                 while ids.time[0] <= main_ids.time[0]:
                     # Note: we may serialize too much here. For example, when the main
                     # stream produces data at 10 Hz, and a secondary stream at 20 Hz, we
-                    # need to throw away every other serialized IDS.
-                    # N.B. if this becomes a bottleneck we could optimize the IDS
-                    # serialization and directly copy the bytes from the Streaming IDS
-                    # data frame into the serialized IDS (assuming we use the
-                    # flexbuffers serialization protocol).
+                    # need to throw away every other serialized IDS. If this becomes a
+                    # bottleneck we could optimize in two ways:
+                    # 1. Stash the data at the streaming IMAS level instead of a
+                    #    serialized IDS. Apply the buffer and serialize the IDS only
+                    #    when needed.
+                    # 2. Improve serialization and  directly copy the bytes from the
+                    #    Streaming IDS data frame into the serialized IDS (assuming we
+                    #    use the flexbuffers serialization protocol).
                     curdata[port] = (ids.time[0], ids.serialize())
-                    next(streams[port])
+                    try:
+                        next(streams[port])
+                    except StopIteration:
+                        break
             yield curdata
 
             # Fetch the next message of the main stream
-            next(main_stream)
+            try:
+                next(main_stream)
+            except StopIteration:
+                return
+            curdata[main_port] = (main_ids.time[0], main_ids.serialize())

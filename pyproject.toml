@@ -30,6 +30,8 @@ dev = [
     "pytest-xdist",
     "pytest-randomly",
     "imas-python[xarray]",
+    # TODO: Remove once the next MUSCLE3 release is out
+    "muscle3 @ git+https://github.com/multiscale/muscle3.git@develop"
 ]
 
 [project.urls]
