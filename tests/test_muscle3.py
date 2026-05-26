@@ -106,7 +106,10 @@ def test_dynamic_port_topics(caplog: pytest.LogCaptureFixture):
 
 
 class MockKafkaConsumer:
+    """Mock object for KafkaConsumer to test IDS synchronization"""
+
     def __init__(self, times: list[float]) -> None:
+        """Mock Kafka stream with empty equilibrium IDSs at the provided time points."""
         self.times = times
         self.ids = imas.IDSFactory().equilibrium()
         self.ids.ids_properties.homogeneous_time = 1
@@ -121,6 +124,12 @@ class MockKafkaConsumer:
             yield self.consumer.process_message(message)
 
 
+def extract_times(data: dict[str, tuple[float, bytes]]) -> dict[str, float]:
+    """Extract time values from the yielded data of
+    DynamicDataSource.generate_serialized_idss."""
+    return {k: v[0] for k, v in data.items()}
+
+
 def test_dynamic_ids_synchronization():
     self = Mock()
     self.consumers = {
@@ -130,14 +139,50 @@ def test_dynamic_ids_synchronization():
         "faster": MockKafkaConsumer([0, 0.8, 1.6, 2.4, 3.2, 4, 4.8, 5.6]),
     }
 
-    def extract_times(data: dict[str, tuple[float, bytes]]) -> dict[str, float]:
-        return {k: v[0] for k, v in data.items()}
+    generated = [
+        extract_times(x) for x in DynamicDataSource.generate_serialized_idss(self)
+    ]
+    assert generated == [
+        dict(main=0, lockstep=0, slower=0, faster=0),
+        dict(main=1, lockstep=1, slower=0, faster=0.8),
+        dict(main=2, lockstep=2, slower=0, faster=1.6),
+        dict(main=3, lockstep=3, slower=0, faster=2.4),
+        dict(main=4, lockstep=4, slower=4, faster=4),
+        dict(main=5, lockstep=5, slower=4, faster=4.8),
+    ]
 
-    generated = [x.copy() for x in DynamicDataSource.generate_serialized_idss(self)]
-    assert len(generated) == 6
-    assert extract_times(generated[0]) == dict(main=0, lockstep=0, slower=0, faster=0)
-    assert extract_times(generated[1]) == dict(main=1, lockstep=1, slower=0, faster=0.8)
-    assert extract_times(generated[2]) == dict(main=2, lockstep=2, slower=0, faster=1.6)
-    assert extract_times(generated[3]) == dict(main=3, lockstep=3, slower=0, faster=2.4)
-    assert extract_times(generated[4]) == dict(main=4, lockstep=4, slower=4, faster=4)
-    assert extract_times(generated[5]) == dict(main=5, lockstep=5, slower=4, faster=4.8)
+
+def test_dynamic_ids_synchronization_with_offset():
+    self = Mock()
+    self.consumers = {
+        "main": MockKafkaConsumer([0, 1, 2, 3]),
+        "delayed": MockKafkaConsumer([1.5, 2, 2.5]),
+        "early": MockKafkaConsumer([-1, 1, 3]),
+    }
+
+    generated = [
+        extract_times(x) for x in DynamicDataSource.generate_serialized_idss(self)
+    ]
+    assert generated == [
+        dict(main=2, delayed=2, early=1),
+        dict(main=3, delayed=2.5, early=3),
+    ]
+
+
+def test_dynamic_ids_synchronization_with_offset2():
+    self = Mock()
+    self.consumers = {
+        # Now delayed will be the 'main' stream for determining time output!
+        "delayed": MockKafkaConsumer([1.5, 2, 2.5]),
+        "main": MockKafkaConsumer([0, 1, 2, 3]),
+        "early": MockKafkaConsumer([-1, 1, 3]),
+    }
+
+    generated = [
+        extract_times(x) for x in DynamicDataSource.generate_serialized_idss(self)
+    ]
+    assert generated == [
+        dict(main=1, delayed=1.5, early=1),
+        dict(main=2, delayed=2, early=1),
+        dict(main=2, delayed=2.5, early=1),
+    ]
