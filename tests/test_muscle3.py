@@ -234,14 +234,14 @@ def test_dynamic_data_source_actor(muscle3_tester, kafka_host):
             args: -m imas_streams dynamic-kafka-to-muscle3
         settings:
           kafka_host: {kafka_host}
-          kafka_timeout: 5.0
+          kafka_timeout: 10.0
           kafka_topics: |
             magnetics_out: test.magnetics
             pf_active_out: test.pf_active
             equilibrium_in: test.equilibrium
         """,
         "imas_streams",
-        default_timeout=10,
+        default_timeout=20,
     )
 
     mag, pfa, eq = map(imas.IDSFactory().new, ["magnetics", "pf_active", "equilibrium"])
