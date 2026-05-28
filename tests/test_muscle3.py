@@ -1,12 +1,18 @@
+import contextlib
+import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import confluent_kafka.admin
 import imas
+import numpy as np
 import pytest
 import ymmsl
+from libmuscle import Message
 from ymmsl.v0_2 import Configuration, Operator, Reference, resolve
 
 from imas_streams import StreamingIDSConsumer, StreamingIDSProducer
+from imas_streams.kafka import KafkaProducer, KafkaSettings
 from imas_streams.muscle3_config import DATA_SOURCE
 from imas_streams.muscle3_datasource import DynamicDataSource
 
@@ -117,7 +123,7 @@ class MockKafkaConsumer:
         self.producer = StreamingIDSProducer(self.ids)
         self.consumer = StreamingIDSConsumer(self.producer.metadata, return_copy=False)
 
-    def stream(self):
+    def stream(self, timeout=None):
         for time in self.times:
             self.ids.time = [float(time)]
             message = self.producer.create_message(self.ids)
@@ -186,3 +192,81 @@ def test_dynamic_ids_synchronization_with_offset2():
         dict(main=2, delayed=2, early=1),
         dict(main=2, delayed=2.5, early=1),
     ]
+
+
+def test_dynamic_data_source_actor(muscle3_tester, kafka_host):
+    # Ensure topics are cleared before start
+    with confluent_kafka.admin.AdminClient({"bootstrap.servers": kafka_host}) as client:
+        fs = client.delete_topics(
+            ["test.magnetics", "test.pf_active", "test.equilibrium"]
+        )
+        for _topic, future in fs.items():
+            # Raises an exception when the topic did not exists or could not be deleted
+            with contextlib.suppress(confluent_kafka.KafkaException):
+                future.result()
+
+    # Populate magnetics and pf_active topics
+    times = {"magnetics": np.linspace(0, 10, 11), "pf_active": np.linspace(-1, 12, 27)}
+    for ids_name in ["magnetics", "pf_active"]:
+        ids = imas.IDSFactory().new(ids_name)
+        ids.ids_properties.homogeneous_time = 1
+        ids.time = times[ids_name][:1]
+        prod = StreamingIDSProducer(ids)
+        kprod = KafkaProducer(
+            KafkaSettings(host=kafka_host, topic_name=f"test.{ids_name}"),
+            prod.metadata,
+        )
+        for t in times[ids_name]:
+            ids.time = [t]
+            kprod.produce(bytes(prod.create_message(ids)))
+        del kprod  # Run cleanup logic
+
+    # Start muscle3 actor
+    tester = muscle3_tester.start_implementation(
+        f"""
+        ymmsl_version: v0.2
+        programs:
+          imas_streams:
+            ports:
+              o_i: magnetics_out pf_active_out
+              s: equilibrium_in
+            executable: {sys.executable}
+            args: -m imas_streams dynamic-kafka-to-muscle3
+        settings:
+          kafka_host: {kafka_host}
+          kafka_timeout: 5.0
+          kafka_topics: |
+            magnetics_out: test.magnetics
+            pf_active_out: test.pf_active
+            equilibrium_in: test.equilibrium
+        """,
+        "imas_streams",
+        default_timeout=10,
+    )
+
+    mag, pfa, eq = map(imas.IDSFactory().new, ["magnetics", "pf_active", "equilibrium"])
+    eq.ids_properties.homogeneous_time = 1
+    for expected_time in np.linspace(0, 10, 11):
+        mag.deserialize(tester.receive("magnetics_out").data)
+        assert np.array_equal(mag.time, [expected_time])
+        pfa.deserialize(tester.receive("pf_active_out").data)
+        assert np.array_equal(pfa.time, [expected_time])
+        eq.time = [expected_time]
+        tester.send("equilibrium_in", Message(expected_time, data=eq.serialize()))
+
+    # Check that the messages were sent to Kafka
+    consumer = confluent_kafka.Consumer(
+        {
+            "bootstrap.servers": kafka_host,
+            "group.id": "pytest",
+            "auto.offset.reset": "earliest",
+        }
+    )
+    consumer.subscribe(["test.equilibrium"])
+    for expected_time in np.linspace(0, 10, 11):
+        msg = consumer.poll(10)
+        assert msg is not None, f"Missing message for t={expected_time}"
+        data = msg.value()
+        assert data is not None
+        eq.deserialize(data)
+        assert np.array_equal(eq.time, [expected_time])

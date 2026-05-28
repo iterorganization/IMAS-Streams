@@ -7,7 +7,12 @@ from libmuscle import Instance, Message
 from ymmsl import Operator
 
 from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer
-from imas_streams.kafka import KafkaConsumer, KafkaSettings, create_kafka_topic
+from imas_streams.kafka import (
+    DEFAULT_KAFKA_CONSUMER_TIMEOUT,
+    KafkaConsumer,
+    KafkaSettings,
+    create_kafka_topic,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,15 +121,21 @@ class DynamicDataSource:
             logger.info("Reading settings")
             kafka_host = self.instance.get_setting("kafka_host", "str")
             kafka_topics = self.instance.get_setting("kafka_topics", "str")
+            self.kafka_timeout = self.instance.get_setting(
+                "kafka_timeout", "float", default=DEFAULT_KAFKA_CONSUMER_TIMEOUT
+            )
 
+            logger.info("Setting up Kafka Producer")
             self.producer = Producer({"bootstrap.servers": kafka_host})
             topic_per_port = self._parse_topics(kafka_topics)
+            logger.info("Setting up Kafka Consumers for each stream")
             for port, topic in topic_per_port.items():
                 if port in self.output_ports:
                     self.consumers[port] = KafkaConsumer(
                         KafkaSettings(host=kafka_host, topic_name=topic),
                         StreamingIDSConsumer,
                         return_copy=False,
+                        timeout=self.kafka_timeout,
                     )
                 else:
                     create_kafka_topic(KafkaSettings(host=kafka_host, topic_name=topic))
@@ -188,7 +199,10 @@ class DynamicDataSource:
     def generate_serialized_idss(self) -> Iterator[dict[str, tuple[float, bytes]]]:
         """Generate synchronized, serialized IDSs for the subscribed streams."""
         # Receive once on each stream:
-        streams = {port: consumer.stream() for port, consumer in self.consumers.items()}
+        streams = {
+            port: consumer.stream(timeout=self.kafka_timeout)
+            for port, consumer in self.consumers.items()
+        }
         idss = {port: next(stream) for port, stream in streams.items()}
 
         latest_starttime = max(ids.time[0] for ids in idss.values())

@@ -111,5 +111,6 @@ programs:
             kafka_topics: >
                 str List of kafka topics per output / input port, in the form of
                 `port_name: topic_name`. Each entry must be on a separate line.
+            kafka_timeout: float Timeout when receiving Kafka messages.
 """
 """yMMSL description of the imas_streams MUSCLE3 components"""
