@@ -71,11 +71,8 @@ def kafka_to_imasentry(
                 entry.put_slice(result)
 
 
-@main.command()
-def kafka_to_muscle3():
-    """MUSCLE3 actor consuming streaming IMAS data from a Kafka topic and making it
-    available to a MUSCLE3 workflow.
-    """
+def _ensure_kafka_muscle3_dependencies():
+    """Ensure optional dependencies are available"""
     # Ensure optional dependencies are available
     try:
         import libmuscle  # noqa: F401
@@ -85,6 +82,13 @@ def kafka_to_muscle3():
         click.echo("Error: please install the optional kafka and muscle3 dependencies.")
         sys.exit(1)
 
+
+@main.command()
+def kafka_to_muscle3():
+    """MUSCLE3 actor consuming streaming IMAS data from a Kafka topic and making it
+    available to a MUSCLE3 workflow.
+    """
+    _ensure_kafka_muscle3_dependencies()
     from imas_streams.muscle3_datasource import data_source
 
     data_source()
@@ -96,15 +100,7 @@ def dynamic_kafka_to_muscle3():
     data available to a MUSCLE3 workflow, with the ability to publish the workflow data
     back to Kafka.
     """
-    # Ensure optional dependencies are available
-    try:
-        import libmuscle  # noqa: F401
-
-        import imas_streams.kafka  # noqa: F401
-    except ModuleNotFoundError:
-        click.echo("Error: please install the optional kafka and muscle3 dependencies.")
-        sys.exit(1)
-
+    _ensure_kafka_muscle3_dependencies()
     from imas_streams.muscle3_datasource import dynamic_data_source
 
     dynamic_data_source()
