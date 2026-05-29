@@ -68,6 +68,8 @@ programs:
             ## Example configuration
 
             ```yaml
+            ymmsl_version: v0.2
+            description: Example usage for imas_streams component
             imports:
             - from imas_streams.data_source import implementation imas_streams
             models:
