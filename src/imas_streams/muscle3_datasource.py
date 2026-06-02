@@ -4,6 +4,7 @@ from collections.abc import Iterator
 import libmuscle
 from confluent_kafka import Producer
 from libmuscle import Instance, Message
+from packaging.version import Version
 from ymmsl import Operator
 
 from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def data_source():
     """MUSCLE3 data source streaming data from a single IMAS Stream on a Kafka topic."""
-    if tuple(map(int, libmuscle.__version__.split(".")[:2])) < (0, 9):
+    if Version(libmuscle.__version__) < Version("0.9"):
         raise RuntimeError("This actor requires libmuscle version 0.9.0 or later")
 
     logger.info("Creating libmuscle instance")
@@ -76,7 +77,8 @@ def dynamic_data_source():
     publishing data back to Kafka.
     """
     # Check which version of M3 supports dynamic O_I and S ports
-    if tuple(map(int, libmuscle.__version__.split(".")[:3])) < (0, 9, 2):
+    if Version(libmuscle.__version__) <= Version("0.9.1"):
+        # N.B. Develop branch with version 0.9.2.dev1 also works
         raise RuntimeError("This actor requires libmuscle version 0.10.0 or later")
     DynamicDataSource().run()
 

@@ -1,5 +1,4 @@
 import logging
-import sys
 
 import click
 import imas
@@ -79,8 +78,9 @@ def _ensure_kafka_muscle3_dependencies():
 
         import imas_streams.kafka  # noqa: F401
     except ModuleNotFoundError:
-        click.echo("Error: please install the optional kafka and muscle3 dependencies.")
-        sys.exit(1)
+        raise click.ClickException(
+            "Please install the optional kafka and muscle3 dependencies."
+        ) from None
 
 
 @main.command()
