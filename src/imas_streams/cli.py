@@ -3,8 +3,9 @@ import sys
 
 import click
 import imas
+from imas.ids_defs import CLOSEST_INTERP, IDS_TIME_MODE_HOMOGENEOUS
 
-from imas_streams import BatchedIDSConsumer
+from imas_streams import BatchedIDSConsumer, StreamingIDSProducer
 
 
 @click.group(invoke_without_command=True, no_args_is_help=True)
@@ -20,6 +21,84 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+
+
+@main.command()
+@click.argument("imas_uri")
+@click.argument("kafka_host")
+@click.argument("kafka_topic")
+def imasentry_to_kafka(imas_uri: str, kafka_host: str, kafka_topic: str) -> None:
+    """Stream data from an existing IMAS data entry to a Kafka topic.
+
+    The input data must be limited to dynamic floating point data, and array shapes must
+    remain constant for all time slices. An error will be displayed when this is not
+    adhered to.
+
+    \b
+    Arguments:
+        IMAS_URI    IMAS URI (including IDS and optionally occurrence) with the data to
+                    be streamed. For example: "imas:hdf5?path=./testdata#magnetics".
+        KAFKA_HOST  Kafka host and port (aka bootstrap.servers). E.g. 'localhost:9092'.
+        KAFKA_TOPIC Name of the kafka topic to stream the data to.
+    """
+    # Local import: kafka is an optional dependency
+    from imas_streams.kafka import KafkaProducer, KafkaSettings
+
+    # Extract IDS/occurrence
+    base_uri, _, ids_and_occurrence = imas_uri.partition("#")
+    idsname, _, occurrence = ids_and_occurrence.partition(":")
+    if not idsname:
+        raise click.UsageError(
+            f"Invalid IMAS URI '{imas_uri}': no IDS name given. Hint: "
+            "add '#<idsname>' to your URI."
+        )
+    if occurrence:
+        try:
+            occurrence = int(occurrence)
+        except ValueError:
+            raise click.UsageError(
+                f"Invalid IMAS URI '{imas_uri}': "
+                f"occurrence '{occurrence}' is not an integer."
+            ) from None
+    else:
+        occurrence = 0
+
+    with imas.DBEntry(base_uri, "r") as entry:
+        # Ensure IDS uses homogeneous time, extract all time points
+        lazy_ids = entry.get(idsname, occurrence, lazy=True, autoconvert=False)
+        if lazy_ids.ids_properties.homogeneous_time != IDS_TIME_MODE_HOMOGENEOUS:
+            raise click.ClickException("The loaded IDS is not using homogeneous time.")
+        times = lazy_ids.time[:]
+        del lazy_ids
+
+        # Get first time slice to obtain the static and metadata
+        ids = entry.get_slice(
+            idsname, times[0], CLOSEST_INTERP, occurrence, autoconvert=False
+        )
+        ids_producer = StreamingIDSProducer(ids)
+
+        kafka_producer = KafkaProducer(
+            KafkaSettings(host=kafka_host, topic_name=kafka_topic),
+            ids_producer.metadata,
+        )
+
+        # Send first time slice
+        kafka_producer.produce(bytes(ids_producer.create_message(ids)))
+
+        # Send remaining time slices
+        with click.progressbar(
+            times[1:], label="Streaming time slices", show_pos=True
+        ) as bar:
+            for time in bar:
+                ids = entry.get_slice(
+                    idsname,
+                    time,
+                    CLOSEST_INTERP,
+                    occurrence,
+                    autoconvert=False,
+                    lazy=True,
+                )
+                kafka_producer.produce(bytes(ids_producer.create_message(ids)))
 
 
 @main.command()
@@ -43,11 +122,9 @@ def kafka_to_imasentry(
 ):
     """Consume streaming IMAS data from Kafka and store data in an IMAS Data Entry.
 
-    N.B. This program requires the optional kafka dependency.
-
     \b
     Arguments:
-        KAFKA_HOST  Kafka host and port (aka bootstrap.servers). E.g. 'localhost:9092'
+        KAFKA_HOST  Kafka host and port (aka bootstrap.servers). E.g. 'localhost:9092'.
         KAFKA_TOPIC Name of the kafka topic with streaming IMAS data.
         IMAS_URI    IMAS URI to store the data at, for example 'imas:hdf5?path=./out'.
                     The program will not overwrite existing data (unless the --overwrite
