@@ -27,7 +27,14 @@ def main() -> None:
 @click.argument("imas_uri")
 @click.argument("kafka_host")
 @click.argument("kafka_topic")
-def imasentry_to_kafka(imas_uri: str, kafka_host: str, kafka_topic: str) -> None:
+@click.option(
+    "--get",
+    is_flag=True,
+    help="Get full IDS instead of iteratively requesting a time slice with get_slice.",
+)
+def imasentry_to_kafka(
+    imas_uri: str, kafka_host: str, kafka_topic: str, get: bool
+) -> None:
     """Stream data from an existing IMAS data entry to a Kafka topic.
 
     The input data must be limited to dynamic floating point data, and array shapes must
@@ -63,31 +70,46 @@ def imasentry_to_kafka(imas_uri: str, kafka_host: str, kafka_topic: str) -> None
     else:
         occurrence = 0
 
+    logging.info("Opening data entry...")
     with imas.DBEntry(base_uri, "r") as entry:
+        logging.info("Reading IDS...")
         # Ensure IDS uses homogeneous time, extract all time points
         lazy_ids = entry.get(idsname, occurrence, lazy=True, autoconvert=False)
         if lazy_ids.ids_properties.homogeneous_time != IDS_TIME_MODE_HOMOGENEOUS:
             raise click.ClickException("The loaded IDS is not using homogeneous time.")
         times = lazy_ids.time[:]
         del lazy_ids
+        logging.info("Found %d time slices to stream", len(times))
 
         # Get first time slice to obtain the static and metadata
         ids = entry.get_slice(
             idsname, times[0], CLOSEST_INTERP, occurrence, autoconvert=False
         )
         ids_producer = StreamingIDSProducer(ids)
-
         kafka_producer = KafkaProducer(
             KafkaSettings(host=kafka_host, topic_name=kafka_topic),
             ids_producer.metadata,
         )
 
-        # Send first time slice
-        kafka_producer.produce(bytes(ids_producer.create_message(ids)))
+        if get:
+            logging.info("Loading full IDS...")
+            ids = entry.get(idsname, occurrence)
+            logging.info("IDS loaded.")
+
+            with click.progressbar(
+                ids_producer.messages_from_batch(ids),
+                length=len(times),
+                label="Streaming time slices",
+                show_pos=True,
+                update_min_steps=1001,
+            ) as bar:
+                for data in bar:
+                    kafka_producer.produce(bytes(data))
+            return
 
         # Send remaining time slices
         with click.progressbar(
-            times[1:], label="Streaming time slices", show_pos=True
+            times, label="Streaming time slices", show_pos=True
         ) as bar:
             for time in bar:
                 ids = entry.get_slice(
