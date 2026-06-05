@@ -86,6 +86,7 @@ def imasentry_to_kafka(
         if n and n < len(times):
             logging.info("Streaming first %d time slices", n)
             times = times[:n]
+        n = len(times)
 
         # Get first time slice to obtain the static and metadata
         ids = entry.get_slice(
@@ -104,7 +105,7 @@ def imasentry_to_kafka(
 
             with click.progressbar(
                 ids_producer.messages_from_batch(ids),
-                length=len(times),
+                length=n,
                 label="Streaming time slices",
                 show_pos=True,
                 update_min_steps=_PROGRESS_BAR_UPDATE_MINSTEP,
@@ -114,7 +115,7 @@ def imasentry_to_kafka(
                         break
                     kafka_producer.produce(bytes(data))
                 # Make bar go to 100%
-                bar.make_step(len(times) % _PROGRESS_BAR_UPDATE_MINSTEP)
+                bar.make_step(n % _PROGRESS_BAR_UPDATE_MINSTEP)
                 bar.render_progress()
             return
 
