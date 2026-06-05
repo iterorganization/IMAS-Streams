@@ -7,6 +7,8 @@ from imas.ids_defs import CLOSEST_INTERP, IDS_TIME_MODE_HOMOGENEOUS
 
 from imas_streams import BatchedIDSConsumer, StreamingIDSProducer
 
+_PROGRESS_BAR_UPDATE_MINSTEP = 1001
+
 
 @click.group(invoke_without_command=True, no_args_is_help=True)
 @click.version_option()
@@ -32,8 +34,9 @@ def main() -> None:
     is_flag=True,
     help="Get full IDS instead of iteratively requesting a time slice with get_slice.",
 )
+@click.option("-n", default=0, help="Maximum number of time slices to stream")
 def imasentry_to_kafka(
-    imas_uri: str, kafka_host: str, kafka_topic: str, get: bool
+    imas_uri: str, kafka_host: str, kafka_topic: str, get: bool, n: int
 ) -> None:
     """Stream data from an existing IMAS data entry to a Kafka topic.
 
@@ -80,6 +83,9 @@ def imasentry_to_kafka(
         times = lazy_ids.time[:]
         del lazy_ids
         logging.info("Found %d time slices to stream", len(times))
+        if n and n < len(times):
+            logging.info("Streaming first %d time slices", n)
+            times = times[:n]
 
         # Get first time slice to obtain the static and metadata
         ids = entry.get_slice(
@@ -101,10 +107,15 @@ def imasentry_to_kafka(
                 length=len(times),
                 label="Streaming time slices",
                 show_pos=True,
-                update_min_steps=1001,
+                update_min_steps=_PROGRESS_BAR_UPDATE_MINSTEP,
             ) as bar:
-                for data in bar:
+                for i, data in enumerate(bar):
+                    if i == n:
+                        break
                     kafka_producer.produce(bytes(data))
+                # Make bar go to 100%
+                bar.make_step(len(times) % _PROGRESS_BAR_UPDATE_MINSTEP)
+                bar.render_progress()
             return
 
         # Send remaining time slices
