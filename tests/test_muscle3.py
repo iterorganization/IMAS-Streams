@@ -31,10 +31,6 @@ resources:
 """
 
 
-@pytest.mark.xfail(
-    tuple(map(int, ymmsl.__version__.split(".")[:3])) < (0, 15, 1),
-    reason="Test needs YMMSL Entry Points plugins",
-)
 def test_load_ymmsl_config():
     config = ymmsl.load_as(Configuration, ymmsl_config)
     resolve(Reference([]), config)
