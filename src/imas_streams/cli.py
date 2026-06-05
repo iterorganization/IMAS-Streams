@@ -100,7 +100,7 @@ def imasentry_to_kafka(
 
         if get:
             logging.info("Loading full IDS...")
-            ids = entry.get(idsname, occurrence)
+            ids = entry.get(idsname, occurrence, autoconvert=False)
             logging.info("IDS loaded.")
 
             with click.progressbar(
