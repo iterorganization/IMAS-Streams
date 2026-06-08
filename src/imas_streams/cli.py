@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import click
 import imas
@@ -153,7 +154,7 @@ def kafka_to_imasentry(
     overwrite: bool,
     timeout: float,
 ):
-    """Consume streaming IMAS data from Kafka and store data in an IMAS Data Entry.
+    """Consume streaming IMAS data from Kafka and store the data in an IMAS Data Entry.
 
     \b
     Arguments:
@@ -179,6 +180,53 @@ def kafka_to_imasentry(
         for result in consumer.stream(timeout=timeout):
             if result is not None:
                 entry.put_slice(result)
+
+
+@main.command
+@click.argument("kafka_host")
+@click.argument("topic")
+@click.argument("filename")
+@click.option(
+    "--batch-size",
+    default=1024,
+    help="Number of time slices to batch when writing data to disk",
+)
+@click.option("--overwrite", is_flag=True, help="Overwrite any existing file")
+@click.option("--timeout", "-t", default=5.0, help="Timeout for receiving next message")
+def kafka_to_netcdf(
+    kafka_host: str,
+    topic: str,
+    filename: str,
+    batch_size: int,
+    overwrite: bool,
+    timeout: float,
+):
+    """Consume streaming IMAS data from Kafka and store the data in an IMAS netCDF file.
+
+    \b
+    Arguments:
+        KAFKA_HOST  Kafka host and port (aka bootstrap.servers). E.g. 'localhost:9092'.
+        TOPIC       Name of the kafka topic with streaming IMAS data.
+        FILENAME    Name of the NetCDF file to write the data to.
+    """
+    # Local import: kafka and netCDF are optional dependencies
+    from imas_streams.kafka import KafkaConsumer, KafkaSettings
+    from imas_streams.netcdf_consumers import NetCDFConsumer
+
+    fpath = Path(filename)
+    if overwrite and fpath.exists():
+        logging.info("Removing existing file '%s'...")
+        fpath.unlink()
+
+    consumer = KafkaConsumer(
+        KafkaSettings(host=kafka_host, topic_name=topic),
+        NetCDFConsumer,
+        filename=fpath,
+        batch_size=batch_size,
+    )
+
+    for _ in consumer.stream(timeout=timeout):
+        pass  # The NetCDFConsumer does everything, but we need to loop over the stream
 
 
 def _ensure_kafka_muscle3_dependencies():
