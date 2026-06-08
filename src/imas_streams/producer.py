@@ -1,4 +1,5 @@
 import copy
+from collections.abc import Iterator
 
 import imas
 import numpy as np
@@ -9,7 +10,9 @@ from imas.ids_toplevel import IDSToplevel
 from imas_streams.metadata import DynamicData, StreamingIMASMetadata
 
 
-def _metadata_from_time_slice(time_slice: IDSToplevel, static_paths: list[str]):
+def _metadata_from_time_slice(
+    time_slice: IDSToplevel, static_paths: list[str]
+) -> StreamingIMASMetadata:
     # -- Data sanity checks --
     # The IDS must use homogeneous time mode
     if time_slice.ids_properties.homogeneous_time != IDS_TIME_MODE_HOMOGENEOUS:
@@ -191,6 +194,7 @@ class StreamingIDSProducer:
         return self._metadata
 
     def create_message(self, time_slice: IDSToplevel) -> bytearray:
+        """Create a single IMAS Streams message from the provided time slice."""
         buffer = bytearray(self._buffersize)
         curindex = 0
         for dyndata in self._metadata.dynamic_data:
@@ -214,3 +218,38 @@ class StreamingIDSProducer:
         if not (curindex == len(buffer) == self._buffersize):
             raise RuntimeError("Internal error: incorrect size of data buffer")
         return buffer
+
+    def messages_from_batch(self, ids: IDSToplevel) -> Iterator[bytearray]:
+        """Create an IMAS Streams message for each time slice in the provided IDS.
+
+        N.B. This method currently doesn't support streaming dynamic arrays of
+        structures.
+        """
+        if ids.ids_properties.homogeneous_time != IDS_TIME_MODE_HOMOGENEOUS:
+            raise ValueError("The provided IDS doesn't use homogeneous time")
+
+        nodes = []
+        for dyndata in self._metadata.dynamic_data:
+            node = ids[dyndata.path]
+            if (
+                dyndata.path != "time"
+                and not node.metadata.coordinates[-1].is_time_coordinate
+            ):
+                raise NotImplementedError(
+                    "messages_from_batch() does not implement streaming data in dynamic"
+                    " arrays of structures. Please use create_message() instead."
+                )
+            nodes.append(node)
+
+        buffer = bytearray(self._buffersize)
+        for i in range(len(ids.time)):
+            curindex = 0
+            for node in nodes:
+                arr: np.ndarray = node.value[..., i]
+                nbytes = arr.nbytes
+                buffer[curindex : curindex + nbytes] = arr.tobytes()
+                curindex += nbytes
+
+            if not (curindex == len(buffer) == self._buffersize):
+                raise RuntimeError("Internal error: incorrect size of data buffer")
+            yield buffer
