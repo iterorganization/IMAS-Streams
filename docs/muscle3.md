@@ -132,18 +132,19 @@ imports:
 - from imas_streams.data_source import implementation imas_streams
 models:
   example:
-    streams:
-      description: IMAS Streams data source and sink
-      implementation: imas_streams
-      ports:
-        O_I: magnetics_out pf_active_out
-        S: equilibrium_in
-    equilibrium:
-      description: Equilibrium reconstruction code
-      implementation: my_equilibrium_program
-      ports:
-        F_INIT: magnetics_in pf_active_in
-        O_F: equilibrium_out
+    components:
+      streams:
+        description: IMAS Streams data source and sink
+        implementation: imas_streams
+        ports:
+          o_i: magnetics_out pf_active_out
+          s: equilibrium_in
+      equilibrium:
+        description: Equilibrium reconstruction code
+        implementation: my_equilibrium_program
+        ports:
+          f_init: magnetics_in pf_active_in
+          o_f: equilibrium_out
     conduits:
       streams.magnetics_out: equilibrium.magnetics_in
       streams.pf_active_out: equilibrium.pf_active_in
