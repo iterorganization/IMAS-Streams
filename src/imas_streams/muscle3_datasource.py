@@ -77,8 +77,7 @@ def dynamic_data_source():
     publishing data back to Kafka.
     """
     # Check which version of M3 supports dynamic O_I and S ports
-    if Version(libmuscle.__version__) <= Version("0.9.1"):
-        # N.B. Develop branch with version 0.9.2.dev1 also works
+    if Version(libmuscle.__version__) < Version("0.10"):
         raise RuntimeError("This actor requires libmuscle version 0.10.0 or later")
     DynamicDataSource().run()
 
