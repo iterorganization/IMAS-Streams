@@ -44,12 +44,13 @@ class KafkaSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _create_kafka_topic(settings: KafkaSettings):
+def create_kafka_topic(settings: KafkaSettings):
     """Create a new kafka topic.
 
     This will raise an exception when the topic already exists, or if the topic could
     not be created (potentially due to missing permissions).
     """
+    logger.info("Creating topic '%s'...", settings.topic_name)
     conf = {"bootstrap.servers": settings.host}
     admin_client = AdminClient(conf)
 
@@ -70,6 +71,7 @@ def _create_kafka_topic(settings: KafkaSettings):
     for _topic, future in fs.items():
         # This will raise an exception when the topic exists or could not be created
         future.result()
+    logger.info("Created topic '%s'", settings.topic_name)
 
 
 class KafkaProducer:
@@ -95,7 +97,7 @@ class KafkaProducer:
         self._message_key = f"IMAS-Kafka-{base64.b64encode(random_id).decode()}"
 
         # Create the topic and send the metadata as first message
-        _create_kafka_topic(settings)
+        create_kafka_topic(settings)
         self._producer.produce(
             topic=self._settings.topic_name,
             value=self._metadata.model_dump_json().encode(),
@@ -109,6 +111,7 @@ class KafkaProducer:
         """Cleanup Kafka Producer resources"""
         # Ensure all messages are sent
         self._producer.flush()
+        self._producer.close()
 
     def produce(self, message: bytes) -> None:
         """Produce a time frame to the configured Kafka topic."""
@@ -156,7 +159,7 @@ class KafkaConsumer:
         settings: KafkaSettings,
         stream_consumer_cls: type[StreamConsumer],
         *,
-        timeout: int = DEFAULT_KAFKA_CONSUMER_TIMEOUT,
+        timeout: float = DEFAULT_KAFKA_CONSUMER_TIMEOUT,
         most_recent_only: bool = False,
         **stream_consumer_kwargs,
     ) -> None:

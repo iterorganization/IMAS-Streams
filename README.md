@@ -16,6 +16,8 @@ this git repository:
 pip install 'imas-streams @ git+https://github.com/iterorganization/IMAS-Streams.git'
 # If you wish to use the kafka features:
 pip install 'imas-streams[kafka] @ git+https://github.com/iterorganization/IMAS-Streams.git'
+# If you wish to use the MUSCLE3 component:
+pip install 'imas-streams[muscle3] @ git+https://github.com/iterorganization/IMAS-Streams.git'
 ```
 
 ## Command line interface

@@ -1,69 +1,26 @@
 import logging
-import sys
+from collections.abc import Iterator
 
-from imas_streams import BatchedIDSConsumer
+import libmuscle
+from confluent_kafka import Producer
+from libmuscle import Instance, Message
+from packaging.version import Version
+from ymmsl import Operator
+
+from imas_streams import BatchedIDSConsumer, StreamingIDSConsumer
+from imas_streams.kafka import (
+    DEFAULT_KAFKA_CONSUMER_TIMEOUT,
+    KafkaConsumer,
+    KafkaSettings,
+    create_kafka_topic,
+)
 
 logger = logging.getLogger(__name__)
 
 
-DATA_SOURCE = f"""
-ymmsl_version: v0.2
-
-description: Importable yMMSL configuration for imas_streams_source
-programs:
-    imas_streams_source:
-        executable: {sys.executable}
-        args: -m imas_streams kafka-to-muscle3
-
-        ports:
-            o_i: ids_out
-            s: trigger
-
-        description: |
-            # IMAS-Streams data source
-
-            Data source reading Streaming IMAS data from a Kafka topic and making it
-            available in a MUSCLE3 simulation.
-
-            The `ids_out` port sends one message for every `batch_size` time slices
-            streamed over the configured kafka topic. The type of IDS depends on the
-            configured kafka topic: please take care that this matches the IDS that is
-            expected for components receiving the message.
-
-            You may use the `trigger` port to indicate that the previous message is
-            processed and a new message may be sent. If this port is not connected then
-            this component will send messages on the `ids_out` port as soon as they are
-            available.
-
-        supported_settings:
-            kafka_host: >
-                str Bootstrap server address for Kafka (e.g. "localhost:9092" for a
-                locally running kafka).
-            kafka_topic: >
-                str Name of the kafka topic with streaming IMAS data to subscribe to.
-            batch_size: >
-                int Number of time slices to batch in a single MUSCLE3 message.
-                Default is one time slice per message.
-            most_recent_only: >
-                bool If not set, or set to false, all data in the IMAS Data Stream is
-                provided to the MUSCLE3 simulation.
-                This can be set to true to provide the last available time point with
-                each iteration. This mode is useful while data is being produced (e.g.
-                during an experimental pulse) and it is more important to have
-                up-to-date data than to process all time points.
-"""
-"""yMMSL description of the imas_streams_source actor"""
-
-
 def data_source():
-    # Local imports for all optional dependencies
-    import libmuscle
-    from libmuscle import Instance, Message
-    from ymmsl import Operator
-
-    from imas_streams.kafka import KafkaConsumer, KafkaSettings
-
-    if tuple(map(int, libmuscle.__version__.split(".")[:2])) < (0, 9):
+    """MUSCLE3 data source streaming data from a single IMAS Stream on a Kafka topic."""
+    if Version(libmuscle.__version__) < Version("0.9"):
         raise RuntimeError("This actor requires libmuscle version 0.9.0 or later")
 
     logger.info("Creating libmuscle instance")
@@ -113,3 +70,183 @@ def data_source():
         logger.info("IMAS data stream ended")
 
     logger.info("Reuse loop finished")
+
+
+def dynamic_data_source():
+    """MUSCLE3 data source supporting streaming from multiple Kafka topics and
+    publishing data back to Kafka.
+    """
+    # Check which version of M3 supports dynamic O_I and S ports
+    if Version(libmuscle.__version__) < Version("0.10"):
+        raise RuntimeError("This actor requires libmuscle version 0.10.0 or later")
+    DynamicDataSource().run()
+
+
+class DynamicDataSource:
+    def __init__(self) -> None:
+        logger.info("Creating libmuscle instance")
+        # Don't specify ports to allow dynamic input/output ports
+        self.instance = Instance()
+
+        # Check the dynamic port configuration
+        ports = self.instance.list_ports()
+        for operator in [Operator.F_INIT, Operator.O_F]:
+            if ports.get(operator):
+                raise RuntimeError(
+                    f"imas_streams does not support {operator.name} ports, but the "
+                    f"following ports were defined: {', '.join(ports[operator])}"
+                )
+        self.output_ports = [
+            port
+            for port in ports.get(Operator.O_I, [])
+            if self.instance.is_connected(port)
+        ]
+        self.input_ports = [
+            port
+            for port in ports.get(Operator.S, [])
+            if self.instance.is_connected(port)
+        ]
+        if not self.output_ports or not self.input_ports:
+            raise RuntimeError(
+                "imas_streams needs at least one O_I port and one S port."
+            )
+
+        self.consumers: dict[str, KafkaConsumer] = {}
+        """Kafka consumer per output port."""
+        self.producer: Producer
+        """Kafka producer."""
+
+    def run(self) -> None:
+        """Run MUSCLE3 reuse loop."""
+        while self.instance.reuse_instance():
+            logger.info("Reading settings")
+            kafka_host = self.instance.get_setting("kafka_host", "str")
+            kafka_topics = self.instance.get_setting("kafka_topics", "str")
+            self.kafka_timeout = self.instance.get_setting(
+                "kafka_timeout", "float", default=DEFAULT_KAFKA_CONSUMER_TIMEOUT
+            )
+
+            logger.info("Setting up Kafka Producer")
+            self.producer = Producer({"bootstrap.servers": kafka_host})
+            topic_per_port = self._parse_topics(kafka_topics)
+            logger.info("Setting up Kafka Consumers for each stream")
+            for port, topic in topic_per_port.items():
+                if port in self.output_ports:
+                    self.consumers[port] = KafkaConsumer(
+                        KafkaSettings(host=kafka_host, topic_name=topic),
+                        StreamingIDSConsumer,
+                        return_copy=False,
+                        timeout=self.kafka_timeout,
+                    )
+                else:
+                    create_kafka_topic(KafkaSettings(host=kafka_host, topic_name=topic))
+
+            for msgs in self.generate_serialized_idss():
+                for port, (t, data) in msgs.items():
+                    self.instance.send(port, Message(t, data=data))
+
+                for port in self.input_ports:
+                    msg = self.instance.receive(port)
+                    # FIXME: This publishes serialized IDSs instead of streaming IMAS
+                    # data. Our test case (EFIT++) doesn't produce data that adheres to
+                    # the the IMAS-Streams assumptions (see README.md) so we cannot do
+                    # better at the moment, unfortunately...
+                    self.producer.produce(
+                        topic=topic_per_port[port],
+                        value=msg.data,
+                    )
+                    self.producer.poll(0)
+
+            # Cleanup
+            self.consumers = {}
+            self.producer.flush()
+
+    def _parse_topics(self, kafka_topics: str) -> dict[str, str]:
+        """Parse kafka topics and return a dict {port_name: topic_name}."""
+        topic_per_port: dict[str, str] = {}
+        for line in kafka_topics.splitlines():
+            if not line.strip():
+                continue
+            port, _, topic = map(str.strip, line.partition(":"))
+            if not topic or not port:
+                raise RuntimeError(
+                    f"Invalid line encountered in 'kafka_topics' setting: '{line}'"
+                )
+
+            if port in self.output_ports or port in self.input_ports:
+                topic_per_port[port] = topic
+            else:
+                logger.info(
+                    "Ignoring kafka topic '%s' for disconnected port '%s'", topic, port
+                )
+
+        # Exception handling: each port needs to have a topic configured:
+        if len(topic_per_port) != len(self.output_ports) + len(self.input_ports):
+            missing_output = [p for p in self.output_ports if p not in topic_per_port]
+            missing_input = [p for p in self.input_ports if p not in topic_per_port]
+            missing_msgs = []
+            if missing_output:
+                missing_msgs.append(f"output ports: {', '.join(missing_output)}")
+            if missing_input:
+                missing_msgs.append(f"input ports: {', '.join(missing_input)}")
+            missing_msg = " and ".join(missing_msgs)
+            raise RuntimeError(
+                f"Kafka topic is missing for {missing_msg}. Please add a line to the "
+                "'kafka_topics' setting for each port."
+            )
+
+        return topic_per_port
+
+    def generate_serialized_idss(self) -> Iterator[dict[str, tuple[float, bytes]]]:
+        """Generate synchronized, serialized IDSs for the subscribed streams."""
+        # Receive once on each stream:
+        streams = {
+            port: consumer.stream(timeout=self.kafka_timeout)
+            for port, consumer in self.consumers.items()
+        }
+        idss = {port: next(stream) for port, stream in streams.items()}
+
+        latest_starttime = max(ids.time[0] for ids in idss.values())
+        main_port = next(iter(streams))
+        main_ids = idss[main_port]
+        main_stream = streams[main_port]
+
+        # Skip ahead the main stream
+        if main_ids.time[0] < latest_starttime:
+            logger.info("Skipping messages until start time of latest stream")
+            while main_ids.time[0] < latest_starttime:
+                next(main_stream)
+
+        # Generate time-synchronized serialized IDSs
+        curdata: dict[str, tuple[float, bytes]] = {
+            port: (ids.time[0], ids.serialize()) for port, ids in idss.items()
+        }
+        while True:
+            # Get the last message <= main_ids.time[0] for each stream
+            for port, ids in idss.items():
+                if ids is main_ids:
+                    continue
+                while ids.time[0] <= main_ids.time[0]:
+                    # Note: we may serialize too much here. For example, when the main
+                    # stream produces data at 10 Hz, and a secondary stream at 20 Hz, we
+                    # need to throw away every other serialized IDS. If this becomes a
+                    # bottleneck we could optimize in two ways:
+                    # 1. Stash the data at the streaming IMAS level instead of a
+                    #    serialized IDS. Apply the buffer and serialize the IDS only
+                    #    when needed.
+                    # 2. Improve serialization and  directly copy the bytes from the
+                    #    Streaming IDS data frame into the serialized IDS (assuming we
+                    #    use the flexbuffers serialization protocol).
+                    curdata[port] = (ids.time[0], ids.serialize())
+                    try:
+                        next(streams[port])
+                    except StopIteration:
+                        break
+            yield curdata
+
+            # Fetch the next message of the main stream
+            try:
+                next(main_stream)
+            except StopIteration:
+                return
+            curdata[main_port] = (main_ids.time[0], main_ids.serialize())

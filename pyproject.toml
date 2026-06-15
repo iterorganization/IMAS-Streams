@@ -14,6 +14,7 @@ classifiers = [
 license = {file = "LICENSE.txt"}
 dependencies = [
     "imas-python",
+    "packaging",
     "pydantic",
 ]
 dynamic = ["version"]
@@ -22,7 +23,7 @@ requires-python = ">=3.11"
 [project.optional-dependencies]
 all = ["imas-streams[dev,kafka,muscle3]"]
 kafka = ["confluent-kafka"]
-muscle3 = ["muscle3 >= 0.9.0"]
+muscle3 = ["muscle3 >= 0.10.0", "imas-streams[kafka]"]
 dev = [
     "ruff",
     "pytest",
@@ -43,7 +44,7 @@ include = ["imas_streams*"]
 imas-streams = "imas_streams.cli:main"
 
 [project.entry-points."ymmsl.module"]
-"imas_streams.data_source" = "imas_streams.muscle3_datasource:DATA_SOURCE"
+"imas_streams.data_source" = "imas_streams.muscle3_config:DATA_SOURCE"
 
 [tool.setuptools_scm]
 local_scheme = "no-local-version"

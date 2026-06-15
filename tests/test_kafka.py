@@ -1,6 +1,5 @@
 import contextlib
 import logging
-import os
 
 import imas
 import pytest
@@ -14,14 +13,6 @@ from imas_streams import StreamingIDSConsumer, StreamingIDSProducer
 from imas_streams.kafka import KafkaConsumer, KafkaProducer, KafkaSettings
 
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture
-def kafka_host():
-    value = os.getenv("KAFKA_HOST")
-    if not value:
-        pytest.fail("Cannot connect to Kafka server: KAFKA_HOST not set.")
-    return value
 
 
 @pytest.fixture
