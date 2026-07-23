@@ -122,7 +122,7 @@ class StreamingXArrayConsumer:
             if path in self._dataset.indexes:
                 # Prevent xarray from creating a copy of the data:
                 tensorview = Index(tensorview, copy=False)
-            to_update[path] = (xrda.dims, tensorview)
+            to_update[path] = (xrda.dims, tensorview, xrda.attrs)
             tensor_idx += size
         self._dataset = self._dataset.assign(to_update)
         # Check that all data arrays are indeed views of our tensor buffer:

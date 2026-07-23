@@ -21,9 +21,11 @@ dynamic = ["version"]
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
-all = ["imas-streams[dev,kafka,muscle3]"]
+all = ["imas-streams[dev,kafka,muscle3,xarray,netcdf]"]
 kafka = ["confluent-kafka"]
 muscle3 = ["muscle3 >= 0.10.0", "imas-streams[kafka]"]
+xarray = ["xarray"]
+netcdf = ["netCDF4"]
 dev = [
     "ruff",
     "pytest",
